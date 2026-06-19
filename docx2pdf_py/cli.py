@@ -4,6 +4,7 @@ import glob
 import os
 import sys
 
+from . import __version__
 from .converter import convert
 
 
@@ -16,6 +17,10 @@ def main(argv=None):
                         help="ruta del .docx (por defecto, el primero del directorio)")
     parser.add_argument("salida", nargs="?", default="output.pdf",
                         help="ruta del PDF de salida (por defecto: output.pdf)")
+    parser.add_argument("-f", "--force", action="store_true",
+                        help="sobrescribe el PDF de salida si ya existe")
+    parser.add_argument("--version", action="version",
+                        version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
     src = args.entrada
@@ -26,6 +31,8 @@ def main(argv=None):
         src = cands[0]
     if not os.path.exists(src):
         parser.error(f"no existe el archivo: {src}")
+    if os.path.exists(args.salida) and not args.force:
+        parser.error(f"la salida ya existe: {args.salida} (usa -f para sobrescribir)")
 
     convert(src, args.salida)
     print(f"✅ {src}  ->  {args.salida}")

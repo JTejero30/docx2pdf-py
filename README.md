@@ -47,20 +47,36 @@ docx2pdf-py                      # usa el primer .docx del directorio -> output.
 
 Portada, cabecera/pie (la referenciada como `default` en el `sectPr`) con número
 de página, encabezados, párrafos con fuente/color/negrita/cursiva/alineación,
-listas, tablas (bordes, sombreados, celdas combinadas), saltos de página
-explícitos e **imágenes** (inline y flotantes, incrustadas en base64). Los campos
-de Word (p. ej. `PAGE`) se interpretan, no se vuelca su valor cacheado.
+**hipervínculos** (con su URL real), listas, tablas (bordes, sombreados, celdas
+combinadas horizontal **y verticalmente**), saltos de página explícitos e
+**imágenes** (inline y flotantes, incrustadas en base64). El tamaño de página
+(incl. apaisado) se toma del `sectPr`. Los campos de Word (p. ej. `PAGE`) se
+interpretan, no se vuelca su valor cacheado.
 
 ## Limitaciones (conversor ligero, no un motor Word completo)
 
 - **Listas**: pinta viñeta `–`; no reproduce numeración (`1.`, `a)`, …).
-- **Fuentes**: mapea Calibri→Carlito y Georgia→Gelasio; otras caen a `sans-serif`.
+- **Fuentes**: mapea Calibri→Carlito y Georgia→Gelasio; el resto usa la fuente real
+  si está instalada y, si no, cae en su familia genérica (serif/sans/monospace).
 - **Tamaño por defecto** 10 pt e **interlineado** ajustados a estilo "ofimático"
   común (configurables vía variables de entorno `BODY_LH` / `CELL_LH`).
 - **Imágenes flotantes** se colocan como bloque (no solapan el texto como Word).
 - **Cabecera/pie**: solo la `default` (ignora primera página / pares distintos).
 - Fidelidad **visual alta**, no *pixel-perfect* (eso exigiría la fuente real y el
   motor de maquetación de Word).
+
+## Seguridad
+
+Un `.docx` es entrada potencialmente no confiable. El parseo del OOXML usa un
+parser de `lxml` endurecido (sin resolución de entidades — evita XXE y *billion
+laughs* — ni acceso a red) y hay topes defensivos frente a *zip bombs*.
+
+## Desarrollo
+
+```bash
+pip install -e .[dev]   # instala también pytest
+pytest                  # los tests cubren build_html (OOXML -> HTML), sin WeasyPrint
+```
 
 ## Estructura
 
@@ -69,6 +85,8 @@ docx2pdf_py/
   __init__.py     → expone convert(), Converter
   converter.py    → conversor OOXML -> HTML -> PDF
   cli.py          → comando docx2pdf-py
+tests/            → suite de pytest (no requiere WeasyPrint)
+.github/workflows → CI (pytest en varias versiones de Python)
 pyproject.toml    → metadatos y dependencias
 main.py           → script de ejemplo (edita la ruta y ejecuta)
 ```

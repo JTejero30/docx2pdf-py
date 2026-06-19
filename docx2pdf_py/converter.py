@@ -10,33 +10,49 @@ Uso:
     from docx2pdf_py import convert
     convert("entrada.docx", "salida.pdf")
 """
-import zipfile
+import base64
 import html as _html
+import os
 import re
+import zipfile
+from typing import Optional
+
 from lxml import etree
-from weasyprint import HTML
 
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 
+# Parser endurecido: un .docx es entrada no confiable. Desactivamos la
+# resolución de entidades (XXE / "billion laughs") y el acceso a red.
+_PARSER = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
 
-def w(tag):
+# Tope defensivo frente a "zip bombs": tamaño máximo descomprimido por miembro
+# y en total (un .docx normal está muy por debajo de esto).
+MAX_MEMBER_BYTES = 200 * 1024 * 1024
+MAX_TOTAL_BYTES = 500 * 1024 * 1024
+
+
+def _xml(data: bytes):
+    return etree.fromstring(data, _PARSER)
+
+
+def w(tag: str) -> str:
     return f"{{{W}}}{tag}"
 
 
-def emu_pt(emu):
+def emu_pt(emu) -> float:
     return float(emu) / 12700.0
 
 
-def first(el, tag):
+def first(el, tag: str):
     if el is None:
         return None
     return el.find(w(tag))
 
 
-def attr(el, name):
+def attr(el, name: str):
     if el is None:
         return None
     return el.get(w(name))
@@ -50,48 +66,64 @@ def on(el):
     return v not in ("0", "false", "off")
 
 
-def tw_pt(twips):
+def tw_pt(twips) -> float:
     return float(twips) / 20.0
 
 
-def tw_cm(twips):
+def tw_cm(twips) -> float:
     return float(twips) / 566.929
 
 
-def esc(s):
+def esc(s: str) -> str:
     return _html.escape(s, quote=False)
 
 
-def keep_spaces(s):
+def keep_spaces(s: str) -> str:
     """Conserva espacios múltiples/iniciales (HTML los colapsaría)."""
     s = esc(s)
-    s = re.sub(r"  +", lambda m: " " + " " * (len(m.group(0)) - 1), s)
+    s = re.sub(r"  +", lambda m: " " + " " * (len(m.group(0)) - 1), s)
     if s.startswith(" "):
-        s = " " + s[1:]
+        s = " " + s[1:]
     return s
 
 
+# Fuentes con sustituto métricamente compatible y libre.
 FONT_MAP = {
     "Calibri": "Carlito, Calibri, sans-serif",
     "Georgia": "Gelasio, Georgia, serif",
 }
 
+# Familia genérica de respaldo para fuentes habituales (si no están instaladas,
+# al menos caen en el género correcto en vez de siempre en sans-serif).
+GENERIC_FAMILY = {
+    "Times New Roman": "serif",
+    "Cambria": "serif",
+    "Garamond": "serif",
+    "Book Antiqua": "serif",
+    "Palatino Linotype": "serif",
+    "Courier New": "monospace",
+    "Consolas": "monospace",
+    "Lucida Console": "monospace",
+}
+
 # Interlineado por defecto (ajustable para casar con el motor de referencia).
-import os
 BODY_LINE_HEIGHT = float(os.environ.get("BODY_LH", "1.0"))
 CELL_LINE_HEIGHT = float(os.environ.get("CELL_LH", "1.16"))
 
 
-def font_stack(name):
+def font_stack(name: Optional[str]) -> Optional[str]:
     if not name:
         return None
-    return FONT_MAP.get(name, f"'{name}', sans-serif")
+    if name in FONT_MAP:
+        return FONT_MAP[name]
+    generic = GENERIC_FAMILY.get(name, "sans-serif")
+    return f"'{name}', {generic}"
 
 
 # ----------------------------------------------------------------------------
 # Resolución de formato de "run" (carácter)
 # ----------------------------------------------------------------------------
-def rpr_dict(rpr):
+def rpr_dict(rpr) -> dict:
     """Extrae propiedades de carácter de un <w:rPr>."""
     d = {}
     if rpr is None:
@@ -125,7 +157,7 @@ def rpr_dict(rpr):
     return d
 
 
-def run_css(d):
+def run_css(d: dict) -> str:
     css = []
     if d.get("font"):
         css.append(f"font-family:{font_stack(d['font'])}")
@@ -153,7 +185,7 @@ def run_css(d):
     return ";".join(css)
 
 
-def border_css(b):
+def border_css(b) -> Optional[str]:
     """CSS de un borde OOXML (<w:top>/<w:bottom>/...)."""
     if b is None:
         return None
@@ -169,13 +201,14 @@ def border_css(b):
 
 
 class Converter:
-    def __init__(self, path):
+    def __init__(self, path: str):
         self.z = zipfile.ZipFile(path)
-        self.doc = etree.fromstring(self.z.read("word/document.xml"))
-        self.styles = etree.fromstring(self.z.read("word/styles.xml"))
+        self._read_bytes = 0
+        self.doc = self._xml_part("word/document.xml")
+        self.styles = self._xml_part("word/styles.xml")
         self.rels = self._index_rels()
         self.style_rpr = self._index_styles()
-        self.default = {"font": "Calibri", "color": "#4a4a4a", "size": 10.0}
+        self.default = {"font": "Calibri", "color": "#000000", "size": 10.0}
         self._img_cache = {}
         self._pending_floats = []  # imágenes flotantes a emitir tras el bloque
 
@@ -186,20 +219,47 @@ class Converter:
         self.header_xml = h if h is not None else self._opt("word/header1.xml")
         self.footer_xml = f if f is not None else self._opt("word/footer1.xml")
 
-    def _opt(self, name):
+    # -- context manager / recursos ---------------------------------------
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+    def close(self):
+        """Cierra el .docx (libera el descriptor del ZIP)."""
+        if getattr(self, "z", None) is not None:
+            self.z.close()
+            self.z = None
+
+    # -- lectura segura del ZIP -------------------------------------------
+    def _read(self, name: str) -> bytes:
+        info = self.z.getinfo(name)
+        if info.file_size > MAX_MEMBER_BYTES:
+            raise ValueError(f"miembro demasiado grande en el .docx: {name}")
+        self._read_bytes += info.file_size
+        if self._read_bytes > MAX_TOTAL_BYTES:
+            raise ValueError("el .docx descomprimido excede el tamaño máximo permitido")
+        return self.z.read(name)
+
+    def _xml_part(self, name: str):
+        return _xml(self._read(name))
+
+    def _opt(self, name: str):
         try:
-            return etree.fromstring(self.z.read(name))
+            return self._xml_part(name)
         except KeyError:
             return None
 
-    def _index_rels(self):
+    def _index_rels(self) -> dict:
         try:
-            root = etree.fromstring(self.z.read("word/_rels/document.xml.rels"))
+            root = self._xml_part("word/_rels/document.xml.rels")
         except KeyError:
             return {}
         return {r.get("Id"): r.get("Target") for r in root}
 
-    def _ref_part(self, sect, tag):
+    def _ref_part(self, sect, tag: str):
         """Carga la parte (header/footer) referenciada como type='default'."""
         if sect is None:
             return None
@@ -211,7 +271,7 @@ class Converter:
                     return self._opt("word/" + target)
         return None
 
-    def _index_styles(self):
+    def _index_styles(self) -> dict:
         out = {}
         for st in self.styles.findall(w("style")):
             sid = attr(st, "styleId")
@@ -219,7 +279,7 @@ class Converter:
         return out
 
     # -- runs --------------------------------------------------------------
-    def render_runs(self, p, base):
+    def render_runs(self, p, base: dict) -> str:
         """HTML de los runs de un párrafo, heredando 'base' (rPr de su estilo).
 
         Ignora los campos (fldChar/instrText) y su valor cacheado: p.ej. el
@@ -231,7 +291,17 @@ class Converter:
             tag = etree.QName(child).localname
             if tag == "hyperlink":
                 inner = self.render_runs(child, base)
-                parts.append(f'<a style="color:inherit;text-decoration:underline">{inner}</a>')
+                rid = child.get(f"{{{R}}}id")
+                href = self.rels.get(rid) if rid else None
+                if href:
+                    parts.append(
+                        f'<a href="{esc(href)}" '
+                        f'style="color:inherit;text-decoration:underline">{inner}</a>'
+                    )
+                else:
+                    parts.append(
+                        f'<a style="color:inherit;text-decoration:underline">{inner}</a>'
+                    )
             elif tag == "r":
                 types = [fc.get(w("fldCharType")) for fc in child.findall(w("fldChar"))]
                 if "begin" in types:
@@ -243,7 +313,7 @@ class Converter:
                     parts.append(self._render_run(child, base))
         return "".join(parts)
 
-    def _render_run(self, r, base):
+    def _render_run(self, r, base: dict) -> str:
         d = dict(base)
         d.update(rpr_dict(first(r, "rPr")))
         chunks = []
@@ -260,7 +330,7 @@ class Converter:
             elif tag == "t":
                 chunks.append(keep_spaces(child.text or ""))
             elif tag == "tab":
-                chunks.append("    ")
+                chunks.append("    ")
             elif tag == "cr":
                 chunks.append("<br>")
             elif tag == "br":
@@ -273,17 +343,16 @@ class Converter:
             out = f'<span style="{css}">{text}</span>' if css else text
         return out + "".join(images)
 
-    def _data_uri(self, target):
+    def _data_uri(self, target: str) -> str:
         if target not in self._img_cache:
-            import base64
             ext = target.rsplit(".", 1)[-1].lower()
             mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "gif": "gif",
                     "bmp": "bmp", "svg": "svg+xml"}.get(ext, ext)
-            data = base64.b64encode(self.z.read("word/" + target)).decode()
+            data = base64.b64encode(self._read("word/" + target)).decode()
             self._img_cache[target] = f"data:image/{mime};base64,{data}"
         return self._img_cache[target]
 
-    def _render_drawing(self, drawing):
+    def _render_drawing(self, drawing) -> str:
         blip = drawing.find(".//" + f"{{{A}}}blip")
         if blip is None:
             return ""
@@ -299,7 +368,7 @@ class Converter:
                 f'style="display:block;margin:6pt auto;max-width:100%;{dims}">')
 
     # -- párrafos ----------------------------------------------------------
-    def render_paragraph(self, p, in_cell=False):
+    def render_paragraph(self, p, in_cell: bool = False) -> str:
         ppr = first(p, "pPr")
         style_id = None
         base = dict(self.default)
@@ -354,7 +423,6 @@ class Converter:
             css.append("color:" + base["color"])
         if base.get("bold"):
             css.append("font-weight:bold")
-        css.append("margin-top:0" if False else "")
         css = [c for c in css if c]
 
         # salto de página explícito (<w:br w:type="page"/>) dentro del párrafo
@@ -363,9 +431,9 @@ class Converter:
 
         inner = self.render_runs(p, base)
         if is_list:
-            inner = "– " + inner  # viñeta "–"
+            inner = "– " + inner  # viñeta "–"
         if not inner:
-            inner = " "
+            inner = " "
         para = f'<p style="{";".join(css)}">{inner}</p>'
 
         # imágenes flotantes (wp:anchor): se difieren para emitirlas como
@@ -377,7 +445,7 @@ class Converter:
         return para
 
     # -- tablas ------------------------------------------------------------
-    def render_table(self, tbl):
+    def render_table(self, tbl) -> str:
         tblpr = first(tbl, "tblPr")
         tblw = first(tblpr, "tblW") if tblpr is not None else None
         style = ["border-collapse:collapse", "table-layout:fixed"]
@@ -398,18 +466,57 @@ class Converter:
                 for gc in grid.findall(w("gridCol"))
             ) + "</colgroup>"
 
-        rows = []
+        # Estructura del cuerpo: posición de columna, gridSpan (horizontal) y
+        # vMerge (vertical) de cada celda, para resolver rowspan.
+        grid_rows = []
         for tr in tbl.findall(w("tr")):
             cells = []
+            col = 0
             for tc in tr.findall(w("tc")):
-                cells.append(self._render_cell(tc, tblbdr))
-            rows.append("<tr>" + "".join(cells) + "</tr>")
+                tcpr = first(tc, "tcPr")
+                gs = first(tcpr, "gridSpan") if tcpr is not None else None
+                span = int(attr(gs, "val")) if gs is not None and attr(gs, "val") else 1
+                vm = first(tcpr, "vMerge") if tcpr is not None else None
+                vmerge = None
+                if vm is not None:
+                    vmerge = "restart" if attr(vm, "val") == "restart" else "continue"
+                cells.append({"tc": tc, "col": col, "span": span,
+                              "vmerge": vmerge, "rowspan": 1})
+                col += span
+            grid_rows.append(cells)
+
+        # rowspan: una celda "restart" absorbe las "continue" de su columna
+        for ri, cells in enumerate(grid_rows):
+            for cell in cells:
+                if cell["vmerge"] == "restart":
+                    rs = 1
+                    for rj in range(ri + 1, len(grid_rows)):
+                        cont = next(
+                            (c for c in grid_rows[rj]
+                             if c["col"] == cell["col"] and c["vmerge"] == "continue"),
+                            None,
+                        )
+                        if cont is None:
+                            break
+                        rs += 1
+                    cell["rowspan"] = rs
+
+        rows = []
+        for cells in grid_rows:
+            out_cells = []
+            for cell in cells:
+                if cell["vmerge"] == "continue":
+                    continue  # absorbida por la celda "restart" superior
+                out_cells.append(
+                    self._render_cell(cell["tc"], tblbdr, rowspan=cell["rowspan"])
+                )
+            rows.append("<tr>" + "".join(out_cells) + "</tr>")
         return f'<table style="{";".join(style)}">{cols}{"".join(rows)}</table>'
 
-    def _render_cell(self, tc, tblbdr):
+    def _render_cell(self, tc, tblbdr, rowspan: int = 1) -> str:
         tcpr = first(tc, "tcPr")
         css = ["vertical-align:top"]
-        colspan = ""
+        spanattr = ""
         tcbdr = first(tcpr, "tcBorders") if tcpr is not None else None
         for side in ("top", "bottom", "left", "right"):
             b = first(tcbdr, side) if tcbdr is not None else None
@@ -438,14 +545,16 @@ class Converter:
                     css[0] = "vertical-align:" + vm
             gs = first(tcpr, "gridSpan")
             if gs is not None:
-                colspan = f' colspan="{attr(gs,"val")}"'
+                spanattr += f' colspan="{attr(gs,"val")}"'
         else:
             css.append("padding:4pt 6pt")
+        if rowspan > 1:
+            spanattr += f' rowspan="{rowspan}"'
         inner = "".join(self.render_paragraph(p, in_cell=True) for p in tc.findall(w("p")))
-        return f'<td{colspan} style="{";".join(css)}">{inner}</td>'
+        return f'<td{spanattr} style="{";".join(css)}">{inner}</td>'
 
     # -- cabecera / pie ----------------------------------------------------
-    def _hf_paragraph(self, root, width_cm, is_footer):
+    def _hf_paragraph(self, root, width_cm: float, is_footer: bool) -> str:
         if root is None:
             return ""
         p = root.find(w("p"))
@@ -466,7 +575,7 @@ class Converter:
         pagenum = ""
         if is_footer:
             # campo PAGE -> contador de página alineado a la derecha
-            inner = re.sub(r" {2,}", " ", inner)
+            inner = re.sub(r" {2,}", " ", inner)
             pagenum = '<span class="pageno" style="float:right"></span>'
         pos = "running(ftr)" if is_footer else "running(hdr)"
         style = (
@@ -476,17 +585,19 @@ class Converter:
         return f'<div id="{elem}" style="{style}">{pagenum}{inner}</div>'
 
     # -- documento completo ------------------------------------------------
-    def build_html(self):
+    def build_html(self) -> str:
         body = self.doc.find(w("body"))
         sect = body.find(w("sectPr"))
         pgsz = first(sect, "pgSz")
         pgmar = first(sect, "pgMar")
         pw = float(attr(pgsz, "w")) if pgsz is not None else 11906
+        ph = float(attr(pgsz, "h")) if pgsz is not None else 16838
         mt = float(attr(pgmar, "top")) if pgmar is not None else 1440
         mb = float(attr(pgmar, "bottom")) if pgmar is not None else 1440
         ml = float(attr(pgmar, "left")) if pgmar is not None else 1200
         mr = float(attr(pgmar, "right")) if pgmar is not None else 1200
         content_cm = tw_cm(pw - ml - mr)
+        page_size = f"{tw_cm(pw):.2f}cm {tw_cm(ph):.2f}cm"
 
         blocks = []
         for child in body:
@@ -506,13 +617,13 @@ class Converter:
 
         page_css = f"""
         @page {{
-            size: A4;
+            size: {page_size};
             margin: {tw_cm(mt):.2f}cm {tw_cm(mr):.2f}cm {tw_cm(mb):.2f}cm {tw_cm(ml):.2f}cm;
             @top-center {{ content: element(hdr); }}
             @bottom-center {{ content: element(ftr); }}
         }}
         html {{ font-family: Carlito, Calibri, sans-serif; font-size: 10pt;
-                color: #4a4a4a; }}
+                color: #000000; }}
         body {{ margin: 0; }}
         p {{ margin: 0; line-height: {BODY_LINE_HEIGHT}; }}
         table {{ margin: 6pt 0; font-size: 10pt; }}
@@ -527,9 +638,13 @@ class Converter:
         )
 
 
-def convert(in_path, out_path):
+def convert(in_path: str, out_path: str) -> str:
     """Convierte ``in_path`` (.docx) a ``out_path`` (.pdf). Devuelve out_path."""
-    conv = Converter(in_path)
-    html = conv.build_html()
+    # Import diferido: así se puede importar el paquete (y probar build_html)
+    # sin tener WeasyPrint —y sus librerías de sistema— instalado.
+    from weasyprint import HTML
+
+    with Converter(in_path) as conv:
+        html = conv.build_html()
     HTML(string=html).write_pdf(out_path)
     return out_path

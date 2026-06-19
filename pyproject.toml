@@ -23,6 +23,9 @@ dependencies = [
     "lxml>=5",
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
 [project.urls]
 Homepage = "https://github.com/javiertejero/docx2pdf-py"
 
