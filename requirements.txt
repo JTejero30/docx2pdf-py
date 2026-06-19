@@ -1,6 +1,11 @@
-# Conversión docx -> PDF (solo Python)
+# Dependencias de ejecución. La fuente de verdad de las versiones es
+# pyproject.toml; aquí se fijan versiones concretas, probadas, para reproducir
+# un entorno (instala con `pip install -r requirements.txt` o `pip install -e .`).
 weasyprint==69.0      # motor de maquetación HTML -> PDF (paginación, tablas)
 lxml==6.1.1           # parseo del OOXML (word/document.xml, styles.xml)
+
+# Desarrollo / tests (o usa `pip install -e .[dev]`):
+#   pytest>=7
 
 # Fuentes métricamente compatibles necesarias para fidelidad visual:
 #   Calibri -> Carlito   |   Georgia -> Gelasio

@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # Los tests ejercitan build_html (OOXML -> HTML) y solo necesitan lxml;
+      # WeasyPrint (y sus librerías de sistema) no hace falta para la suite.
+      - name: Install test deps
+        run: pip install lxml pytest
+      - name: Run tests
+        run: python -m pytest -q
