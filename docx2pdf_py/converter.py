@@ -33,6 +33,8 @@ _PARSER = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=Fal
 MAX_MEMBER_BYTES = 200 * 1024 * 1024
 MAX_TOTAL_BYTES = 500 * 1024 * 1024
 
+BLOCK_IMG_STYLE = "display:block;margin:6pt auto;max-width:100%;"
+
 
 def _xml(data: bytes):
     return etree.fromstring(data, _PARSER)
@@ -85,6 +87,44 @@ def keep_spaces(s: str) -> str:
     if s.startswith(" "):
         s = " " + s[1:]
     return s
+
+
+# -- numeración de listas ----------------------------------------------------
+def _to_letter(n: int) -> str:
+    """1 -> a, 26 -> z, 27 -> aa (estilo Word lowerLetter/upperLetter)."""
+    s = ""
+    while n > 0:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s or "A"
+
+
+def _to_roman(n: int) -> str:
+    if n <= 0:
+        return str(n)
+    table = [(1000, "M"), (900, "CM"), (500, "D"), (400, "CD"), (100, "C"),
+             (90, "XC"), (50, "L"), (40, "XL"), (10, "X"), (9, "IX"),
+             (5, "V"), (4, "IV"), (1, "I")]
+    out = ""
+    for v, sym in table:
+        while n >= v:
+            out += sym
+            n -= v
+    return out
+
+
+def _format_num(n: int, fmt: str) -> str:
+    if fmt == "lowerLetter":
+        return _to_letter(n).lower()
+    if fmt == "upperLetter":
+        return _to_letter(n).upper()
+    if fmt == "lowerRoman":
+        return _to_roman(n).lower()
+    if fmt == "upperRoman":
+        return _to_roman(n).upper()
+    if fmt == "decimalZero":
+        return f"{n:02d}"
+    return str(n)
 
 
 # Fuentes con sustituto métricamente compatible y libre.
@@ -208,16 +248,31 @@ class Converter:
         self.styles = self._xml_part("word/styles.xml")
         self.rels = self._index_rels()
         self.style_rpr = self._index_styles()
+        self.num_levels = self._index_numbering()
         self.default = {"font": "Calibri", "color": "#000000", "size": 10.0}
         self._img_cache = {}
-        self._pending_floats = []  # imágenes flotantes a emitir tras el bloque
+        self._pending_floats = []   # imágenes flotantes "bloque" tras el bloque
+        self._list_counters = {}    # numId -> {ilvl: contador actual}
 
-        # cabecera/pie de la sección por defecto (según sectPr)
+        # cabecera/pie por tipo (default / first / even) según el sectPr
         sect = self.doc.find(w("body")).find(w("sectPr"))
-        h = self._ref_part(sect, "headerReference")
-        f = self._ref_part(sect, "footerReference")
-        self.header_xml = h if h is not None else self._opt("word/header1.xml")
-        self.footer_xml = f if f is not None else self._opt("word/footer1.xml")
+        self.headers = {t: self._ref_part(sect, "headerReference", t)
+                        for t in ("default", "first", "even")}
+        self.footers = {t: self._ref_part(sect, "footerReference", t)
+                        for t in ("default", "first", "even")}
+        if self.headers["default"] is None:
+            self.headers["default"] = self._opt("word/header1.xml")
+        if self.footers["default"] is None:
+            self.footers["default"] = self._opt("word/footer1.xml")
+
+        # primera página distinta (<w:titlePg/>) y pares/impares distintos
+        self.title_pg = bool(on(first(sect, "titlePg"))) if sect is not None else False
+        try:
+            settings = self._xml_part("word/settings.xml")
+        except KeyError:
+            settings = None
+        self.even_odd = (settings is not None
+                         and settings.find(w("evenAndOddHeaders")) is not None)
 
     # -- context manager / recursos ---------------------------------------
     def __enter__(self):
@@ -259,12 +314,12 @@ class Converter:
             return {}
         return {r.get("Id"): r.get("Target") for r in root}
 
-    def _ref_part(self, sect, tag: str):
-        """Carga la parte (header/footer) referenciada como type='default'."""
+    def _ref_part(self, sect, tag: str, type_: str = "default"):
+        """Carga la parte (header/footer) referenciada con el type dado."""
         if sect is None:
             return None
         for ref in sect.findall(w(tag)):
-            if ref.get(w("type")) == "default":
+            if ref.get(w("type")) == type_:
                 rid = ref.get(f"{{{R}}}id")
                 target = self.rels.get(rid)
                 if target:
@@ -277,6 +332,63 @@ class Converter:
             sid = attr(st, "styleId")
             out[sid] = rpr_dict(first(st, "rPr"))
         return out
+
+    def _index_numbering(self) -> dict:
+        """numId -> {ilvl: {fmt, text, start, left, hanging}} desde numbering.xml."""
+        try:
+            numx = self._xml_part("word/numbering.xml")
+        except KeyError:
+            return {}
+        abstract = {}
+        for an in numx.findall(w("abstractNum")):
+            aid = an.get(w("abstractNumId"))
+            levels = {}
+            for lvl in an.findall(w("lvl")):
+                ilvl = int(lvl.get(w("ilvl")) or 0)
+                fmt = first(lvl, "numFmt")
+                txt = first(lvl, "lvlText")
+                start = first(lvl, "start")
+                ppr = first(lvl, "pPr")
+                ind = first(ppr, "ind") if ppr is not None else None
+                levels[ilvl] = {
+                    "fmt": attr(fmt, "val") if fmt is not None else "decimal",
+                    "text": attr(txt, "val") if txt is not None else "",
+                    "start": (int(attr(start, "val"))
+                              if start is not None and attr(start, "val") else 1),
+                    "left": attr(ind, "left") if ind is not None else None,
+                    "hanging": attr(ind, "hanging") if ind is not None else None,
+                }
+            abstract[aid] = levels
+        out = {}
+        for num in numx.findall(w("num")):
+            nid = num.get(w("numId"))
+            a = first(num, "abstractNumId")
+            aid = attr(a, "val") if a is not None else None
+            if aid in abstract:
+                out[nid] = abstract[aid]
+        return out
+
+    def _list_marker(self, num_id, ilvl: int) -> Optional[str]:
+        """Marcador de lista numerada (p.ej. '1.', 'a)', 'IV.') o None si viñeta."""
+        levels = self.num_levels.get(num_id)
+        if not levels:
+            return None
+        level = levels.get(ilvl)
+        if level is None or level["fmt"] == "bullet":
+            return None
+        counters = self._list_counters.setdefault(num_id, {})
+        counters[ilvl] = counters.get(ilvl, level["start"] - 1) + 1
+        for deeper in [k for k in list(counters) if k > ilvl]:
+            del counters[deeper]  # reiniciar niveles más profundos
+        text = level["text"] or ("%" + str(ilvl + 1) + ".")
+
+        def repl(m):
+            idx = int(m.group(1)) - 1  # %1 -> nivel 0
+            ldef = levels.get(idx, level)
+            val = counters.get(idx, ldef["start"])
+            return _format_num(val, ldef["fmt"])
+
+        return re.sub(r"%(\d)", repl, text)
 
     # -- runs --------------------------------------------------------------
     def render_runs(self, p, base: dict) -> str:
@@ -322,7 +434,7 @@ class Converter:
             tag = etree.QName(child).localname
             if tag == "drawing":
                 # solo las imágenes EN LÍNEA van aquí; las flotantes (wp:anchor)
-                # las emite el párrafo como bloque aparte (no dentro de su caja)
+                # las gestiona el párrafo (float o bloque aparte)
                 if child.find(f"{{{WP}}}inline") is not None:
                     img = self._render_drawing(child)
                     if img:
@@ -352,7 +464,7 @@ class Converter:
             self._img_cache[target] = f"data:image/{mime};base64,{data}"
         return self._img_cache[target]
 
-    def _render_drawing(self, drawing) -> str:
+    def _img_html(self, drawing, style: str) -> str:
         blip = drawing.find(".//" + f"{{{A}}}blip")
         if blip is None:
             return ""
@@ -364,8 +476,35 @@ class Converter:
         if ext is not None and ext.get("cx") and ext.get("cy"):
             dims = (f"width:{emu_pt(ext.get('cx')):.1f}pt;"
                     f"height:{emu_pt(ext.get('cy')):.1f}pt;")
-        return (f'<img src="{self._data_uri(target)}" '
-                f'style="display:block;margin:6pt auto;max-width:100%;{dims}">')
+        return f'<img src="{self._data_uri(target)}" style="{style}{dims}">'
+
+    def _render_drawing(self, drawing) -> str:
+        return self._img_html(drawing, BLOCK_IMG_STYLE)
+
+    def _render_anchor(self, drawing):
+        """Imagen flotante (wp:anchor). Devuelve (html, wraps).
+
+        Con ajuste cuadrado/estrecho/transparente la maquetamos con ``float``
+        para que el texto la rodee; con "arriba y abajo"/"ninguno" cae a bloque.
+        """
+        anchor = drawing.find(f"{{{WP}}}anchor")
+        wraps = False
+        side = "left"
+        if anchor is not None:
+            if (anchor.find(f"{{{WP}}}wrapSquare") is not None
+                    or anchor.find(f"{{{WP}}}wrapTight") is not None
+                    or anchor.find(f"{{{WP}}}wrapThrough") is not None):
+                wraps = True
+            ph = anchor.find(f"{{{WP}}}positionH")
+            if ph is not None:
+                al = ph.find(f"{{{WP}}}align")
+                if al is not None and (al.text or "").strip() == "right":
+                    side = "right"
+        if wraps:
+            margin = "0 8pt 4pt 0" if side == "left" else "0 0 4pt 8pt"
+            style = f"float:{side};margin:{margin};max-width:50%;"
+            return self._img_html(drawing, style), True
+        return self._render_drawing(drawing), False
 
     # -- párrafos ----------------------------------------------------------
     def render_paragraph(self, p, in_cell: bool = False) -> str:
@@ -379,7 +518,9 @@ class Converter:
                 base.update(self.style_rpr[style_id])
 
         css = []
-        is_list = False
+        num_id = None
+        ilvl = 0
+        has_ind = False
         if ppr is not None:
             jc = first(ppr, "jc")
             if jc is not None:
@@ -396,6 +537,7 @@ class Converter:
                     css.append(f"line-height:{float(line)/240.0:.2f}")
             ind = first(ppr, "ind")
             if ind is not None:
+                has_ind = True
                 if attr(ind, "left"):
                     css.append(f"margin-left:{tw_pt(attr(ind,'left')):.1f}pt")
                 if attr(ind, "right"):
@@ -413,7 +555,22 @@ class Converter:
                         sp_attr = first(pbdr, side)
                         if attr(sp_attr, "space"):
                             css.append(f"padding-{side}:{float(attr(sp_attr,'space')):.0f}pt")
-            is_list = first(ppr, "numPr") is not None
+            numpr = first(ppr, "numPr")
+            if numpr is not None:
+                nid_el = first(numpr, "numId")
+                ilvl_el = first(numpr, "ilvl")
+                num_id = attr(nid_el, "val") if nid_el is not None else None
+                if ilvl_el is not None and attr(ilvl_el, "val"):
+                    ilvl = int(attr(ilvl_el, "val"))
+
+        is_list = num_id is not None
+        # sangría propia del nivel de lista (si el párrafo no la trae)
+        level = self.num_levels.get(num_id, {}).get(ilvl) if num_id else None
+        if level and not has_ind:
+            if level.get("left"):
+                css.append(f"margin-left:{tw_pt(level['left']):.1f}pt")
+            if level.get("hanging"):
+                css.append(f"text-indent:-{tw_pt(level['hanging']):.1f}pt")
 
         # tamaño/fuente por defecto del párrafo (para que también afecte a
         # bullets y a la altura de líneas vacías)
@@ -430,19 +587,27 @@ class Converter:
             css.append("break-after:page")
 
         inner = self.render_runs(p, base)
-        if is_list:
-            inner = "– " + inner  # viñeta "–"
-        if not inner:
-            inner = " "
-        para = f'<p style="{";".join(css)}">{inner}</p>'
 
-        # imágenes flotantes (wp:anchor): se difieren para emitirlas como
-        # bloque tras el bloque de nivel superior (párrafo o tabla), fuera de
-        # cualquier caja/celda — como hace Word, que las saca del contenedor
+        # imágenes flotantes: con ajuste -> float dentro del párrafo (el texto
+        # las rodea); sin ajuste -> bloque diferido tras el bloque actual.
+        float_html = ""
         for dr in p.iter(w("drawing")):
             if dr.find(f"{{{WP}}}anchor") is not None:
-                self._pending_floats.append(self._render_drawing(dr))
-        return para
+                img, wraps = self._render_anchor(dr)
+                if not img:
+                    continue
+                if wraps:
+                    float_html += img
+                else:
+                    self._pending_floats.append(img)
+
+        if is_list:
+            marker = self._list_marker(num_id, ilvl)
+            inner = (esc(marker) if marker else "–") + " " + inner
+        if not inner.strip():
+            inner = inner or " "
+        inner = float_html + inner
+        return f'<p style="{";".join(css)}">{inner}</p>'
 
     # -- tablas ------------------------------------------------------------
     def render_table(self, tbl) -> str:
@@ -554,7 +719,8 @@ class Converter:
         return f'<td{spanattr} style="{";".join(css)}">{inner}</td>'
 
     # -- cabecera / pie ----------------------------------------------------
-    def _hf_paragraph(self, root, width_cm: float, is_footer: bool) -> str:
+    def _hf_div(self, root, width_cm: float, is_footer: bool, name: str) -> str:
+        """Renderiza una cabecera/pie como elemento ``running(name)``."""
         if root is None:
             return ""
         p = root.find(w("p"))
@@ -571,18 +737,23 @@ class Converter:
                     border = f"border-{side}:{bc};padding-{side}:3pt;"
         base = dict(self.default)
         inner = self.render_runs(p, base)
-        elem = "ftr" if is_footer else "hdr"
         pagenum = ""
         if is_footer:
             # campo PAGE -> contador de página alineado a la derecha
             inner = re.sub(r" {2,}", " ", inner)
             pagenum = '<span class="pageno" style="float:right"></span>'
-        pos = "running(ftr)" if is_footer else "running(hdr)"
         style = (
-            f"position:{pos};width:{width_cm:.2f}cm;{border}"
+            f"position:running({name});width:{width_cm:.2f}cm;{border}"
             f"font-family:{font_stack('Calibri')};color:#4a4a4a;"
         )
-        return f'<div id="{elem}" style="{style}">{pagenum}{inner}</div>'
+        return f'<div id="{name}" style="{style}">{pagenum}{inner}</div>'
+
+    @staticmethod
+    def _slot(elem_name: Optional[str], where: str) -> str:
+        """Regla @top-center/@bottom-center que apunta a un running element."""
+        if elem_name is None:
+            return ""
+        return f"@{where} {{ content: element({elem_name}); }}"
 
     # -- documento completo ------------------------------------------------
     def build_html(self) -> str:
@@ -608,20 +779,54 @@ class Converter:
                 blocks.append(self.render_table(child))
             else:
                 continue
-            if self._pending_floats:  # imágenes flotantes tras el bloque
+            if self._pending_floats:  # imágenes flotantes "bloque" tras el bloque
                 blocks.extend(self._pending_floats)
                 self._pending_floats = []
 
-        header = self._hf_paragraph(self.header_xml, content_cm, is_footer=False)
-        footer = self._hf_paragraph(self.footer_xml, content_cm, is_footer=True)
+        # Cabeceras/pies por tipo. Cada variante presente se emite como un
+        # running element con nombre propio y se asocia a su regla @page.
+        divs = []
+
+        def emit(root, is_footer, name):
+            html = self._hf_div(root, content_cm, is_footer, name)
+            if html:
+                divs.append(html)
+                return name
+            return None
+
+        hdr = emit(self.headers["default"], False, "hdr")
+        ftr = emit(self.footers["default"], True, "ftr")
+        hdr_first = emit(self.headers["first"], False, "hdr_first")
+        ftr_first = emit(self.footers["first"], True, "ftr_first")
+        hdr_even = emit(self.headers["even"], False, "hdr_even")
+        ftr_even = emit(self.footers["even"], True, "ftr_even")
+
+        base_page = (
+            f"@page {{ size: {page_size};\n"
+            f"  margin: {tw_cm(mt):.2f}cm {tw_cm(mr):.2f}cm "
+            f"{tw_cm(mb):.2f}cm {tw_cm(ml):.2f}cm;\n"
+            f"  {self._slot(hdr, 'top-center')} {self._slot(ftr, 'bottom-center')} }}"
+        )
+
+        first_page = ""
+        if self.title_pg:
+            th = (self._slot(hdr_first, "top-center")
+                  if hdr_first else "@top-center { content: none; }")
+            tf = (self._slot(ftr_first, "bottom-center")
+                  if ftr_first else "@bottom-center { content: none; }")
+            first_page = f"@page :first {{ {th} {tf} }}"
+
+        even_page = ""
+        if self.even_odd and (hdr_even or ftr_even):
+            even_page = (
+                f"@page :left {{ {self._slot(hdr_even, 'top-center')} "
+                f"{self._slot(ftr_even, 'bottom-center')} }}"
+            )
 
         page_css = f"""
-        @page {{
-            size: {page_size};
-            margin: {tw_cm(mt):.2f}cm {tw_cm(mr):.2f}cm {tw_cm(mb):.2f}cm {tw_cm(ml):.2f}cm;
-            @top-center {{ content: element(hdr); }}
-            @bottom-center {{ content: element(ftr); }}
-        }}
+        {base_page}
+        {first_page}
+        {even_page}
         html {{ font-family: Carlito, Calibri, sans-serif; font-size: 10pt;
                 color: #000000; }}
         body {{ margin: 0; }}
@@ -633,7 +838,7 @@ class Converter:
         return (
             "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
             + page_css + "</style></head><body>"
-            + header + footer + "".join(blocks)
+            + "".join(divs) + "".join(blocks)
             + "</body></html>"
         )
 

@@ -45,23 +45,27 @@ docx2pdf-py                      # usa el primer .docx del directorio -> output.
 
 ## Qué reproduce
 
-Portada, cabecera/pie (la referenciada como `default` en el `sectPr`) con número
-de página, encabezados, párrafos con fuente/color/negrita/cursiva/alineación,
-**hipervínculos** (con su URL real), listas, tablas (bordes, sombreados, celdas
+Portada, cabecera/pie (incluidas las variantes **primera página** y
+**pares/impares** vía `titlePg` / `evenAndOddHeaders`) con número de página,
+encabezados, párrafos con fuente/color/negrita/cursiva/alineación,
+**hipervínculos** (con su URL real), **listas numeradas** (`1.`, `a)`, `IV.`…
+leídas de `numbering.xml`) y con viñeta, tablas (bordes, sombreados, celdas
 combinadas horizontal **y verticalmente**), saltos de página explícitos e
-**imágenes** (inline y flotantes, incrustadas en base64). El tamaño de página
-(incl. apaisado) se toma del `sectPr`. Los campos de Word (p. ej. `PAGE`) se
-interpretan, no se vuelca su valor cacheado.
+**imágenes** (inline y flotantes; las flotantes con ajuste cuadrado/estrecho
+**rodean el texto** mediante `float`). El tamaño de página (incl. apaisado) se
+toma del `sectPr`. Los campos de Word (p. ej. `PAGE`) se interpretan, no se
+vuelca su valor cacheado.
 
 ## Limitaciones (conversor ligero, no un motor Word completo)
 
-- **Listas**: pinta viñeta `–`; no reproduce numeración (`1.`, `a)`, …).
+- **Listas numeradas**: se renderiza el formato del nivel, pero no se aplican
+  reinicios/overrides explícitos (`lvlOverride`, `startOverride`).
 - **Fuentes**: mapea Calibri→Carlito y Georgia→Gelasio; el resto usa la fuente real
   si está instalada y, si no, cae en su familia genérica (serif/sans/monospace).
 - **Tamaño por defecto** 10 pt e **interlineado** ajustados a estilo "ofimático"
   común (configurables vía variables de entorno `BODY_LH` / `CELL_LH`).
-- **Imágenes flotantes** se colocan como bloque (no solapan el texto como Word).
-- **Cabecera/pie**: solo la `default` (ignora primera página / pares distintos).
+- **Imágenes flotantes**: el ajuste se aproxima con `float` (posición exacta por
+  desplazamiento absoluto no se reproduce); "arriba y abajo"/"ninguno" caen a bloque.
 - Fidelidad **visual alta**, no *pixel-perfect* (eso exigiría la fuente real y el
   motor de maquetación de Word).
 
