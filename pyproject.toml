@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "docx2pdf-py"
 version = "0.1.0"
-description = "Conversión fiel de .docx a PDF usando solo librerías de Python (lxml + WeasyPrint)."
+description = "Faithful .docx to PDF conversion using pure Python (lxml + WeasyPrint)."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
@@ -19,12 +19,12 @@ classifiers = [
     "Topic :: Text Processing :: Markup",
 ]
 dependencies = [
-    "weasyprint>=60",
-    "lxml>=5",
+    "weasyprint>=60,<72",
+    "lxml>=5,<8",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7", "ruff>=0.6"]
+dev = ["pytest>=7", "ruff>=0.6", "pytest-cov>=4", "mypy>=1", "lxml-stubs", "bandit>=1.7"]
 
 [project.urls]
 Homepage = "https://github.com/antoniolujanoluna/docx2pdf-py"
@@ -43,5 +43,21 @@ target-version = "py39"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
-# E702: el código usa puntualmente ';' para fusiones compactas de dicts.
+# E702: code uses ';' sparingly for compact dict merges.
 ignore = ["E702"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true
+check_untyped_defs = true
+
+[tool.bandit]
+# B404/B603: subprocess usage is controlled (no shell=True, no user input in cmd).
+skips = ["B404", "B603"]
+
+[tool.coverage.run]
+source = ["docx2pdf_py"]
+
+[tool.coverage.report]
+fail_under = 70
+show_missing = true

@@ -84,7 +84,7 @@ def test_explicit_word_unavailable_raises(docx, monkeypatch):
 
 
 def test_unknown_engine_raises():
-    with pytest.raises(ValueError, match="motor desconocido"):
+    with pytest.raises(ValueError, match="unknown engine"):
         C.convert("in.docx", "out.pdf", engine="ghostscript")
 
 
@@ -134,12 +134,12 @@ def test_convert_libreoffice_reports_failure(tmp_path, monkeypatch):
         return R()
 
     monkeypatch.setattr(E.subprocess, "run", fake_run)
-    with pytest.raises(RuntimeError, match="no pudo convertir"):
+    with pytest.raises(RuntimeError, match="failed to convert"):
         E.convert_libreoffice(str(src), str(tmp_path / "o.pdf"),
                               soffice="/usr/bin/soffice")
 
 
 def test_convert_libreoffice_no_binary(monkeypatch):
     monkeypatch.setattr(E, "find_libreoffice", lambda: None)
-    with pytest.raises(RuntimeError, match="no está disponible"):
+    with pytest.raises(RuntimeError, match="not available"):
         E.convert_libreoffice("in.docx", "out.pdf", soffice=None)

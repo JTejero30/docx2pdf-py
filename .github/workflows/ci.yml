@@ -13,31 +13,48 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install ruff
-        run: pip install ruff
-      - name: Lint
+      - name: Install lint tools
+        run: pip install ruff bandit mypy lxml lxml-stubs
+      - name: Lint (ruff)
         run: ruff check .
+      - name: Security scan (bandit)
+        run: bandit -q -r docx2pdf_py/
+      - name: Type check (mypy)
+        run: mypy docx2pdf_py/
 
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.9", "3.11", "3.12"]
+        python-version: ["3.9", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # Los tests ejercitan build_html (OOXML -> HTML) y solo necesitan lxml;
-      # WeasyPrint (y sus librerías de sistema) no hace falta para la suite.
+      # Tests exercise build_html (OOXML -> HTML) and only need lxml;
+      # WeasyPrint (and its native libraries) is not required for the suite.
+      - name: Install test deps
+        run: pip install lxml pytest pytest-cov
+      - name: Run tests with coverage
+        run: python -m pytest -q --cov=docx2pdf_py --cov-report=term-missing --cov-fail-under=70
+
+  engines-macos:
+    # Verify engine detection works on macOS (Word/LibreOffice path logic).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - name: Install test deps
         run: pip install lxml pytest
-      - name: Run tests
-        run: python -m pytest -q
+      - name: Run engine-detection tests
+        run: python -m pytest tests/test_engines.py -q
 
   e2e:
-    # Conversión real de extremo a extremo con LibreOffice (motor por defecto en
-    # 'auto' cuando no hay Word): comprueba que se produce un PDF válido.
+    # Full end-to-end conversion with LibreOffice (the default engine in
+    # 'auto' mode when Word is absent): verifies that a valid PDF is produced.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

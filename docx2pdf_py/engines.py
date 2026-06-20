@@ -1,17 +1,17 @@
-"""Backends de conversión .docx -> PDF basados en motores de maquetación reales.
+"""Conversion backends using real layout engines for .docx -> PDF.
 
-Un .docx no guarda páginas fijas: las calcula el motor de maquetación al
-renderizar. Por eso el flujo propio (lxml + WeasyPrint) solo puede *aproximar*
-la paginación de Word. Si en el sistema hay un motor real, lo usamos y el PDF
-tiene **el mismo contenido por página** que el documento:
+A .docx does not store fixed pages: they are computed by the layout engine at
+render time. The native flow (lxml + WeasyPrint) can only *approximate* Word's
+pagination. When a real engine is available the PDF has the **same content per
+page** as the original document:
 
-- **Microsoft Word** (Windows vía COM, macOS vía AppleScript): paginación
-  idéntica a la de Word.
-- **LibreOffice** (headless, multiplataforma): paginación fiel a cómo LibreOffice
-  renderiza el documento (motor distinto al de Word, muy parecido pero no
-  garantizado idéntico).
+- **Microsoft Word** (Windows via COM, macOS via AppleScript): identical
+  pagination to Word.
+- **LibreOffice** (headless, cross-platform): faithful pagination as LibreOffice
+  renders the document (a different engine to Word, very similar but not
+  guaranteed identical).
 
-Si no hay ninguno disponible, quien llama recurre al flujo lxml + WeasyPrint.
+If neither is available, the caller falls back to the lxml + WeasyPrint flow.
 """
 import os
 import platform
@@ -31,9 +31,9 @@ _SOFFICE_PATHS = (
 
 # -- LibreOffice ------------------------------------------------------------
 def find_libreoffice():
-    """Ruta al ejecutable de LibreOffice (``soffice``) o ``None`` si no está.
+    """Path to the LibreOffice executable (``soffice``), or ``None`` if absent.
 
-    Se puede forzar con la variable de entorno ``SOFFICE_BIN``.
+    Can be overridden with the ``SOFFICE_BIN`` environment variable.
     """
     override = os.environ.get("SOFFICE_BIN")
     if override and os.path.exists(override):
@@ -49,15 +49,15 @@ def find_libreoffice():
 
 
 def convert_libreoffice(in_path, out_path, soffice=None, timeout=120):
-    """Convierte ``in_path`` -> ``out_path`` con LibreOffice headless."""
+    """Convert ``in_path`` -> ``out_path`` using LibreOffice headless."""
     soffice = soffice or find_libreoffice()
     if not soffice:
-        raise RuntimeError("LibreOffice (soffice) no está disponible")
+        raise RuntimeError("LibreOffice (soffice) is not available")
     in_path = os.path.abspath(in_path)
     out_path = os.path.abspath(out_path)
     with tempfile.TemporaryDirectory() as tmp:
-        # Perfil de usuario aislado: permite ejecuciones concurrentes y evita
-        # chocar con una instancia de LibreOffice ya abierta por el usuario.
+        # Isolated user profile: allows concurrent runs and avoids colliding
+        # with an existing LibreOffice instance the user may have open.
         profile = os.path.join(tmp, "profile")
         cmd = [
             soffice, "--headless", "--norestore",
@@ -70,7 +70,7 @@ def convert_libreoffice(in_path, out_path, soffice=None, timeout=120):
         )
         if proc.returncode != 0 or not os.path.exists(produced):
             detail = (proc.stderr or proc.stdout or b"").decode(errors="replace").strip()
-            raise RuntimeError("LibreOffice no pudo convertir el documento" +
+            raise RuntimeError("LibreOffice failed to convert the document" +
                                (f": {detail}" if detail else ""))
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
         shutil.copyfile(produced, out_path)
@@ -79,7 +79,7 @@ def convert_libreoffice(in_path, out_path, soffice=None, timeout=120):
 
 # -- Microsoft Word ---------------------------------------------------------
 def word_available():
-    """¿Hay Microsoft Word automatizable en este sistema?"""
+    """Return True if Microsoft Word can be automated on this system."""
     system = platform.system()
     if system == "Windows":
         for mod in ("win32com.client", "comtypes.client"):
@@ -95,7 +95,7 @@ def word_available():
 
 
 def convert_word(in_path, out_path):
-    """Convierte ``in_path`` -> ``out_path`` automatizando Microsoft Word."""
+    """Convert ``in_path`` -> ``out_path`` by automating Microsoft Word."""
     in_path = os.path.abspath(in_path)
     out_path = os.path.abspath(out_path)
     system = platform.system()
@@ -103,7 +103,7 @@ def convert_word(in_path, out_path):
         return _convert_word_windows(in_path, out_path)
     if system == "Darwin":
         return _convert_word_macos(in_path, out_path)
-    raise RuntimeError("Microsoft Word solo se puede automatizar en Windows o macOS")
+    raise RuntimeError("Microsoft Word automation is only supported on Windows and macOS")
 
 
 def _convert_word_windows(in_path, out_path):
@@ -126,7 +126,7 @@ def _convert_word_windows(in_path, out_path):
 
 
 def _convert_word_macos(in_path, out_path):
-    # AppleScript: abre el documento en Word y lo guarda como PDF.
+    # AppleScript: open the document in Word and save it as PDF.
     script = (
         'tell application "Microsoft Word"\n'
         f'  set theDoc to open file name (POSIX file "{in_path}" as string)\n'
@@ -137,14 +137,14 @@ def _convert_word_macos(in_path, out_path):
     proc = subprocess.run(["osascript", "-e", script], capture_output=True, timeout=120)
     if proc.returncode != 0 or not os.path.exists(out_path):
         detail = proc.stderr.decode(errors="replace").strip()
-        raise RuntimeError("Word (macOS) no pudo convertir el documento" +
+        raise RuntimeError("Word (macOS) failed to convert the document" +
                            (f": {detail}" if detail else ""))
     return out_path
 
 
-# -- selección de motor -----------------------------------------------------
+# -- engine selection -------------------------------------------------------
 def default_engine():
-    """Motor que usaría el modo ``auto`` en este sistema, sin convertir nada."""
+    """Return the engine that ``auto`` mode would use on this system."""
     if word_available():
         return "word"
     if find_libreoffice():

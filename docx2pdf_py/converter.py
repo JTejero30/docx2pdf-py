@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""docx -> PDF con SOLO librerías de Python, fiel al original.
+"""docx -> PDF using pure Python libraries.
 
-Lee el OOXML del .docx (estilos reales: fuentes, colores, bordes, sombreados,
-tablas, cabecera/pie) y lo recrea como HTML, que WeasyPrint maqueta y pagina a
-PDF. Las fuentes Calibri/Georgia se mapean a sus equivalentes métricos libres
-Carlito/Gelasio.
+Reads OOXML from a .docx (real styles: fonts, colours, borders, shading,
+tables, headers/footers) and recreates it as HTML, which WeasyPrint lays out
+and paginates into a PDF. Calibri/Georgia are mapped to their metrically
+compatible free equivalents Carlito/Gelasio.
 
-Uso:
+Usage:
     from docx2pdf_py import convert
-    convert("entrada.docx", "salida.pdf")
+    convert("input.docx", "output.pdf")
 """
 import base64
+import concurrent.futures
 import html as _html
 import os
 import re
@@ -27,14 +28,22 @@ WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
 DC = "http://purl.org/dc/elements/1.1/"
 CP = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 
-# Parser endurecido: un .docx es entrada no confiable. Desactivamos la
-# resolución de entidades (XXE / "billion laughs") y el acceso a red.
+# Hardened parser: a .docx is untrusted input. Disable entity resolution
+# (XXE / "billion laughs") and network access.
 _PARSER = etree.XMLParser(resolve_entities=False, no_network=True, huge_tree=False)
 
-# Tope defensivo frente a "zip bombs": tamaño máximo descomprimido por miembro
-# y en total (un .docx normal está muy por debajo de esto).
+# Defensive limits against zip bombs: max decompressed size per member and
+# in total (a normal .docx is well below these figures).
 MAX_MEMBER_BYTES = 200 * 1024 * 1024
 MAX_TOTAL_BYTES = 500 * 1024 * 1024
+
+# Unit-conversion constants.
+_EMU_PER_PT: float = 12700.0   # English Metric Units per typographic point
+_TWIP_PER_PT: float = 20.0     # twentieths of a point per point
+_TWIP_PER_CM: float = 566.929  # twentieths of a point per centimetre
+
+# WeasyPrint rendering timeout in seconds (0 = no timeout).
+_WEASYPRINT_TIMEOUT = int(os.environ.get("WEASYPRINT_TIMEOUT", "120"))
 
 BLOCK_IMG_STYLE = "display:block;margin:6pt auto;max-width:100%;"
 
@@ -48,7 +57,7 @@ def w(tag: str) -> str:
 
 
 def emu_pt(emu) -> float:
-    return float(emu) / 12700.0
+    return float(emu) / _EMU_PER_PT
 
 
 def first(el, tag: str):
@@ -72,11 +81,11 @@ def on(el):
 
 
 def tw_pt(twips) -> float:
-    return float(twips) / 20.0
+    return float(twips) / _TWIP_PER_PT
 
 
 def tw_cm(twips) -> float:
-    return float(twips) / 566.929
+    return float(twips) / _TWIP_PER_CM
 
 
 def esc(s: str) -> str:
@@ -297,8 +306,8 @@ class Converter:
     def __init__(self, path: str):
         self.z = zipfile.ZipFile(path)
         self._read_bytes = 0
-        self.doc = self._xml_part("word/document.xml")
-        self.styles = self._xml_part("word/styles.xml")
+        self.doc = self._require_xml_part("word/document.xml")
+        self.styles = self._require_xml_part("word/styles.xml")
         self.rels = self._index_rels()
         self.theme_fonts = self._index_theme()
         self.def_rpr, self.def_ppr = self._doc_defaults()
@@ -354,14 +363,21 @@ class Converter:
     def _read(self, name: str) -> bytes:
         info = self.z.getinfo(name)
         if info.file_size > MAX_MEMBER_BYTES:
-            raise ValueError(f"miembro demasiado grande en el .docx: {name}")
+            raise ValueError(f"oversized member in .docx: {name}")
         self._read_bytes += info.file_size
         if self._read_bytes > MAX_TOTAL_BYTES:
-            raise ValueError("el .docx descomprimido excede el tamaño máximo permitido")
+            raise ValueError("uncompressed .docx exceeds the maximum allowed size")
         return self.z.read(name)
 
     def _xml_part(self, name: str):
         return _xml(self._read(name))
+
+    def _require_xml_part(self, name: str):
+        """Like _xml_part but raises ValueError (not KeyError) when absent."""
+        try:
+            return self._xml_part(name)
+        except KeyError as exc:
+            raise ValueError(f"required OOXML part missing from .docx: {name}") from exc
 
     def _opt(self, name: str):
         try:
@@ -1100,46 +1116,60 @@ _ENGINE_ALIASES = {
 
 
 def _convert_weasyprint(in_path: str, out_path: str) -> str:
-    """Flujo propio: OOXML -> HTML -> PDF con WeasyPrint (paginación aproximada)."""
-    # Import diferido: así se puede importar el paquete (y probar build_html)
-    # sin tener WeasyPrint —y sus librerías de sistema— instalado.
+    """Native flow: OOXML -> HTML -> PDF via WeasyPrint (approximate pagination)."""
+    # Deferred import: the package (and build_html) can be used without
+    # WeasyPrint — and its native libraries — being installed.
     from weasyprint import HTML
 
     with Converter(in_path) as conv:
         html = conv.build_html()
-    HTML(string=html).write_pdf(out_path)
+
+    def _render() -> None:
+        HTML(string=html).write_pdf(out_path)
+
+    if _WEASYPRINT_TIMEOUT > 0:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_render)
+            try:
+                future.result(timeout=_WEASYPRINT_TIMEOUT)
+            except concurrent.futures.TimeoutError as exc:
+                raise TimeoutError(
+                    f"WeasyPrint timed out after {_WEASYPRINT_TIMEOUT}s"
+                ) from exc
+    else:
+        _render()
+
     return out_path
 
 
 def convert(in_path: str, out_path: str, engine: str = "auto") -> str:
-    """Convierte ``in_path`` (.docx) a ``out_path`` (.pdf). Devuelve out_path.
+    """Convert ``in_path`` (.docx) to ``out_path`` (.pdf). Returns out_path.
 
-    ``engine`` elige el motor de maquetación:
+    ``engine`` selects the layout engine:
 
-    - ``"auto"`` (por defecto): usa Microsoft Word o LibreOffice si están
-      disponibles —paginación fiel, mismo contenido por página que el .docx— y,
-      si no, recurre al flujo lxml + WeasyPrint.
-    - ``"word"`` / ``"libreoffice"`` / ``"weasyprint"``: fuerza ese motor (falla
-      si el elegido no está disponible).
+    - ``"auto"`` (default): uses Microsoft Word or LibreOffice when available
+      — faithful pagination, same page breaks as the original — and falls back
+      to the lxml + WeasyPrint flow otherwise.
+    - ``"word"`` / ``"libreoffice"`` / ``"weasyprint"``: forces that engine
+      (raises if the chosen engine is not available).
     """
     from . import engines
 
     key = _ENGINE_ALIASES.get((engine or "auto").lower())
     if key is None:
         raise ValueError(
-            f"motor desconocido: {engine!r} (usa auto/word/libreoffice/weasyprint)"
+            f"unknown engine: {engine!r} (use auto/word/libreoffice/weasyprint)"
         )
 
     if not os.path.exists(in_path):
-        raise FileNotFoundError(f"no existe el archivo de entrada: {in_path}")
+        raise FileNotFoundError(f"input file not found: {in_path}")
     if not zipfile.is_zipfile(in_path):
         raise ValueError(
-            f"el archivo no es un .docx válido (no es un ZIP OOXML): {in_path}"
+            f"file is not a valid .docx (not a ZIP/OOXML): {in_path}"
         )
 
     if key == "auto":
-        # Probamos motores reales en orden; si uno falla en ejecución, pasamos
-        # al siguiente y, en último término, al flujo HTML.
+        # Try real layout engines in order; degrade to WeasyPrint on failure.
         attempts = (
             ("word", engines.word_available, engines.convert_word),
             ("libreoffice", lambda: bool(engines.find_libreoffice()),
@@ -1149,25 +1179,25 @@ def convert(in_path: str, out_path: str, engine: str = "auto") -> str:
             if ready():
                 try:
                     return run(in_path, out_path)
-                except Exception as exc:  # noqa: BLE001 — degradar con aviso
+                except Exception as exc:  # noqa: BLE001 — degrade with warning
                     sys.stderr.write(
-                        f"[docx2pdf-py] el motor '{label}' falló ({exc}); "
-                        "probando el siguiente\n"
+                        f"[docx2pdf-py] engine '{label}' failed ({exc}); "
+                        "trying next\n"
                     )
         return _convert_weasyprint(in_path, out_path)
 
     if key == "word":
         if not engines.word_available():
             raise RuntimeError(
-                "se pidió Word pero no está disponible "
-                "(solo Windows/macOS con Word instalado)"
+                "Word engine requested but not available "
+                "(requires Windows or macOS with Word installed)"
             )
         return engines.convert_word(in_path, out_path)
 
     if key == "libreoffice":
         if not engines.find_libreoffice():
             raise RuntimeError(
-                "se pidió LibreOffice pero no se encontró 'soffice' en el sistema"
+                "LibreOffice engine requested but 'soffice' was not found on this system"
             )
         return engines.convert_libreoffice(in_path, out_path)
 
