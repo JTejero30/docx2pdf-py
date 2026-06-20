@@ -1,6 +1,4 @@
 """Tests de docx2pdf_py centrados en build_html (no requieren WeasyPrint)."""
-import zipfile
-
 import pytest
 
 from docx2pdf_py import converter as C

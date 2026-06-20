@@ -24,6 +24,8 @@ W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 A = "http://schemas.openxmlformats.org/drawingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 WP = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+DC = "http://purl.org/dc/elements/1.1/"
+CP = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
 
 # Parser endurecido: un .docx es entrada no confiable. Desactivamos la
 # resolución de entidades (XXE / "billion laughs") y el acceso a red.
@@ -147,6 +149,24 @@ GENERIC_FAMILY = {
     "Lucida Console": "monospace",
 }
 
+# Colores con nombre del resaltado de Word (<w:highlight w:val="yellow"/>).
+HIGHLIGHT_COLORS = {
+    "black": "#000000", "blue": "#0000FF", "cyan": "#00FFFF",
+    "darkBlue": "#000080", "darkCyan": "#008080", "darkGray": "#808080",
+    "darkGreen": "#008000", "darkMagenta": "#800080", "darkRed": "#800000",
+    "darkYellow": "#808000", "green": "#00FF00", "lightGray": "#C0C0C0",
+    "magenta": "#FF00FF", "red": "#FF0000", "white": "#FFFFFF",
+    "yellow": "#FFFF00",
+}
+
+# Glifos de viñeta más habituales por carácter o por fuente de símbolos
+# (Wingdings/Symbol usan code points privados); se cae a "•" si no se reconoce.
+BULLET_GLYPHS = {
+    "": "•", "": "▪", "": "✓", "": "➢",
+    "o": "o", "•": "•", "▪": "▪", "·": "·",
+    "–": "–", "−": "–", "*": "•",
+}
+
 # Interlineado por defecto (ajustable para casar con el motor de referencia).
 BODY_LINE_HEIGHT = float(os.environ.get("BODY_LH", "1.0"))
 CELL_LINE_HEIGHT = float(os.environ.get("CELL_LH", "1.16"))
@@ -209,6 +229,17 @@ def rpr_dict(rpr) -> dict:
     va = first(rpr, "vertAlign")
     if va is not None:
         d["va"] = attr(va, "val")
+    hl = first(rpr, "highlight")
+    if hl is not None:
+        v = attr(hl, "val")
+        if v and v != "none":
+            d["highlight"] = HIGHLIGHT_COLORS.get(v, v)
+    caps = on(first(rpr, "caps"))
+    if caps is not None:
+        d["caps"] = caps
+    smallcaps = on(first(rpr, "smallCaps"))
+    if smallcaps is not None:
+        d["smallcaps"] = smallcaps
     return d
 
 
@@ -229,6 +260,13 @@ def run_css(d: dict) -> str:
         css.append("text-decoration:" + " ".join(deco))
     if d.get("color"):
         css.append("color:" + d["color"])
+    if d.get("highlight"):
+        css.append("background-color:" + d["highlight"])
+    # caps -> mayúsculas; smallCaps -> versalitas. Word da prioridad a caps.
+    if d.get("caps"):
+        css.append("text-transform:uppercase")
+    elif d.get("smallcaps"):
+        css.append("font-variant:small-caps")
     size = d.get("size")
     va = d.get("va")
     if va in ("superscript", "subscript"):
@@ -370,6 +408,27 @@ class Converter:
                     out[key] = latin.get("typeface")
         return out
 
+    def _doc_metadata(self) -> dict:
+        """Título/autor/asunto/palabras clave desde docProps/core.xml.
+
+        WeasyPrint los traslada a los metadatos del PDF vía <title>/<meta>.
+        """
+        core = self._opt("docProps/core.xml")
+        if core is None:
+            return {}
+        out = {}
+        for key, ns, tag in (
+            ("title", DC, "title"),
+            ("author", DC, "creator"),
+            ("subject", DC, "subject"),
+            ("description", DC, "description"),
+            ("keywords", CP, "keywords"),
+        ):
+            el = core.find(f"{{{ns}}}{tag}")
+            if el is not None and el.text and el.text.strip():
+                out[key] = el.text.strip()
+        return out
+
     def _resolve_theme_font(self, d: dict) -> None:
         """Si el dict de formato apunta a una fuente de tema, fija su nombre."""
         if not d.get("font") and d.get("font_theme"):
@@ -426,6 +485,10 @@ class Converter:
         (carácter y párrafo) de su padre, con protección frente a ciclos.
         """
         raw = {}
+        # Estilos por defecto (w:default="1"): Word los aplica a párrafos sin
+        # un pStyle explícito. Guardamos el del tipo "paragraph" y "character".
+        self.default_pstyle = None
+        self.default_rstyle = None
         for st in self.styles.findall(w("style")):
             sid = attr(st, "styleId")
             based = first(st, "basedOn")
@@ -434,6 +497,12 @@ class Converter:
                 "ppr": self._ppr_layout(first(st, "pPr")),
                 "based": attr(based, "val") if based is not None else None,
             }
+            if attr(st, "default") in ("1", "true", "on"):
+                stype = attr(st, "type")
+                if stype == "paragraph" and self.default_pstyle is None:
+                    self.default_pstyle = sid
+                elif stype == "character" and self.default_rstyle is None:
+                    self.default_rstyle = sid
 
         resolved = {}
 
@@ -493,6 +562,12 @@ class Converter:
             if aid in abstract:
                 out[nid] = abstract[aid]
         return out
+
+    def _bullet_glyph(self, num_id, ilvl: int) -> str:
+        """Glifo de viñeta del nivel (mapeado a un equivalente Unicode)."""
+        level = self.num_levels.get(num_id, {}).get(ilvl)
+        text = (level or {}).get("text") or ""
+        return BULLET_GLYPHS.get(text.strip(), "•") if text.strip() else "•"
 
     def _list_marker(self, num_id, ilvl: int) -> Optional[str]:
         """Marcador de lista numerada (p.ej. '1.', 'a)', 'IV.') o None si viñeta."""
@@ -642,9 +717,13 @@ class Converter:
         if ppr is not None:
             ps = first(ppr, "pStyle")
             style_id = attr(ps, "val") if ps is not None else None
-            if style_id and style_id in self.style_rpr:
-                base.update(self.style_rpr[style_id])
-                layout.update(self.style_ppr.get(style_id, {}))
+        # Sin pStyle explícito, Word aplica el estilo de párrafo por defecto
+        # (w:default="1", normalmente "Normal").
+        if style_id is None:
+            style_id = self.default_pstyle
+        if style_id and style_id in self.style_rpr:
+            base.update(self.style_rpr[style_id])
+            layout.update(self.style_ppr.get(style_id, {}))
         self._resolve_theme_font(base)
         # las propiedades propias del párrafo pisan a las heredadas del estilo
         layout.update(self._ppr_layout(ppr))
@@ -746,7 +825,9 @@ class Converter:
 
         if is_list:
             marker = self._list_marker(num_id, ilvl)
-            inner = (esc(marker) if marker else "–") + " " + inner
+            if marker is None:
+                marker = self._bullet_glyph(num_id, ilvl)
+            inner = esc(marker) + " " + inner
         if not inner.strip():
             inner = inner or " "
         inner = float_html + inner
@@ -992,8 +1073,17 @@ class Converter:
         td p {{ margin: 0; line-height: {CELL_LINE_HEIGHT}; }}
         .pageno::after {{ content: counter(page); }}
         """
+        # Metadatos del documento -> <title>/<meta> que WeasyPrint vuelca al PDF.
+        meta = self._doc_metadata()
+        head_meta = ""
+        if meta.get("title"):
+            head_meta += f"<title>{esc(meta['title'])}</title>"
+        for key in ("author", "description", "keywords"):
+            if meta.get(key):
+                head_meta += f"<meta name='{key}' content='{esc(meta[key])}'>"
         return (
-            "<!DOCTYPE html><html><head><meta charset='utf-8'><style>"
+            "<!DOCTYPE html><html><head><meta charset='utf-8'>"
+            + head_meta + "<style>"
             + page_css + "</style></head><body>"
             + "".join(divs) + "".join(blocks)
             + "</body></html>"
@@ -1038,6 +1128,13 @@ def convert(in_path: str, out_path: str, engine: str = "auto") -> str:
     if key is None:
         raise ValueError(
             f"motor desconocido: {engine!r} (usa auto/word/libreoffice/weasyprint)"
+        )
+
+    if not os.path.exists(in_path):
+        raise FileNotFoundError(f"no existe el archivo de entrada: {in_path}")
+    if not zipfile.is_zipfile(in_path):
+        raise ValueError(
+            f"el archivo no es un .docx válido (no es un ZIP OOXML): {in_path}"
         )
 
     if key == "auto":

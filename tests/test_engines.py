@@ -9,6 +9,13 @@ import pytest
 
 from docx2pdf_py import converter as C
 from docx2pdf_py import engines as E
+from tests.conftest import document
+
+
+@pytest.fixture
+def docx(make_docx):
+    """Un .docx mínimo real (convert() valida que la entrada sea un ZIP OOXML)."""
+    return make_docx(document("<w:p><w:r><w:t>x</w:t></w:r></w:p>"))
 
 
 # -- detección de LibreOffice ----------------------------------------------
@@ -34,25 +41,25 @@ def test_find_libreoffice_absent(monkeypatch):
 
 
 # -- selección de motor en convert() ----------------------------------------
-def test_auto_falls_back_to_weasyprint(monkeypatch):
+def test_auto_falls_back_to_weasyprint(docx, monkeypatch):
     monkeypatch.setattr(E, "word_available", lambda: False)
     monkeypatch.setattr(E, "find_libreoffice", lambda: None)
     monkeypatch.setattr(C, "_convert_weasyprint",
                         lambda i, o: f"weasy:{o}")
-    assert C.convert("in.docx", "out.pdf") == "weasy:out.pdf"
+    assert C.convert(docx, "out.pdf") == "weasy:out.pdf"
 
 
-def test_auto_prefers_word_then_libreoffice(monkeypatch):
+def test_auto_prefers_word_then_libreoffice(docx, monkeypatch):
     calls = []
     monkeypatch.setattr(E, "word_available", lambda: True)
     monkeypatch.setattr(E, "convert_word",
                         lambda i, o: calls.append("word") or f"word:{o}")
     monkeypatch.setattr(E, "find_libreoffice", lambda: "/usr/bin/soffice")
-    assert C.convert("in.docx", "out.pdf") == "word:out.pdf"
+    assert C.convert(docx, "out.pdf") == "word:out.pdf"
     assert calls == ["word"]
 
 
-def test_auto_degrades_when_engine_raises(monkeypatch):
+def test_auto_degrades_when_engine_raises(docx, monkeypatch):
     monkeypatch.setattr(E, "word_available", lambda: True)
 
     def boom(i, o):
@@ -61,19 +68,19 @@ def test_auto_degrades_when_engine_raises(monkeypatch):
     monkeypatch.setattr(E, "convert_word", boom)
     monkeypatch.setattr(E, "find_libreoffice", lambda: None)
     monkeypatch.setattr(C, "_convert_weasyprint", lambda i, o: f"weasy:{o}")
-    assert C.convert("in.docx", "out.pdf") == "weasy:out.pdf"
+    assert C.convert(docx, "out.pdf") == "weasy:out.pdf"
 
 
-def test_explicit_libreoffice_unavailable_raises(monkeypatch):
+def test_explicit_libreoffice_unavailable_raises(docx, monkeypatch):
     monkeypatch.setattr(E, "find_libreoffice", lambda: None)
     with pytest.raises(RuntimeError, match="LibreOffice"):
-        C.convert("in.docx", "out.pdf", engine="libreoffice")
+        C.convert(docx, "out.pdf", engine="libreoffice")
 
 
-def test_explicit_word_unavailable_raises(monkeypatch):
+def test_explicit_word_unavailable_raises(docx, monkeypatch):
     monkeypatch.setattr(E, "word_available", lambda: False)
     with pytest.raises(RuntimeError, match="Word"):
-        C.convert("in.docx", "out.pdf", engine="word")
+        C.convert(docx, "out.pdf", engine="word")
 
 
 def test_unknown_engine_raises():

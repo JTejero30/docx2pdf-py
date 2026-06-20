@@ -6,6 +6,18 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        run: ruff check .
+
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -22,3 +34,21 @@ jobs:
         run: pip install lxml pytest
       - name: Run tests
         run: python -m pytest -q
+
+  e2e:
+    # Conversión real de extremo a extremo con LibreOffice (motor por defecto en
+    # 'auto' cuando no hay Word): comprueba que se produce un PDF válido.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install LibreOffice
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-writer
+      - name: Install package
+        run: pip install lxml -e .
+      - name: Convert a sample .docx and check the PDF
+        run: python tests/e2e_smoke.py

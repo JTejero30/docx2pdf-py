@@ -7,7 +7,7 @@ Uso:
     from docx2pdf_py import convert
     convert("entrada.docx", "salida.pdf")
 """
-from .converter import convert, Converter
+from .converter import Converter, convert
 from .engines import default_engine, find_libreoffice, word_available
 
 __version__ = "0.1.0"

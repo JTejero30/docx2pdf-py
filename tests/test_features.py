@@ -78,18 +78,18 @@ def test_lower_letter_format(make_docx):
     assert "b) <span" in html and "beta" in html
 
 
-def test_bullet_falls_back_to_dash(make_docx):
+def test_bullet_uses_level_glyph(make_docx):
     parts = {"word/numbering.xml": numbering(fmt="bullet", text="•")}
     with Converter(make_docx(document(list_para("item")), parts=parts)) as conv:
         html = conv.build_html()
-    assert "– <span" in html and "item" in html
+    assert "• <span" in html and "item" in html
 
 
 def test_list_without_numbering_part(make_docx):
-    # sin numbering.xml, una lista sigue mostrando viñeta
+    # sin numbering.xml, una lista sigue mostrando viñeta (•)
     with Converter(make_docx(document(list_para("x")))) as conv:
         html = conv.build_html()
-    assert "– <span" in html and ">x<" in html
+    assert "• <span" in html and ">x<" in html
 
 
 # ---------------------------------------------------------------------------

@@ -52,20 +52,25 @@ docx2pdf-py                      # usa el primer .docx del directorio -> output.
 
 Portada, cabecera/pie (incluidas las variantes **primera página** y
 **pares/impares** vía `titlePg` / `evenAndOddHeaders`) con número de página,
-encabezados, párrafos con fuente/color/negrita/cursiva/alineación,
+encabezados, párrafos con fuente/color/negrita/cursiva/alineación, **resaltado**
+(`w:highlight`), **mayúsculas/versalitas** (`w:caps`/`w:smallCaps`),
 **hipervínculos** (con su URL real), **listas numeradas** (`1.`, `a)`, `IV.`…
-leídas de `numbering.xml`) y con viñeta, tablas (bordes, sombreados, celdas
-combinadas horizontal **y verticalmente**, y **tablas anidadas**), saltos de
-página explícitos e **imágenes** (inline y flotantes; las flotantes con ajuste
-cuadrado/estrecho **rodean el texto** mediante `float`). El tamaño de página
-(incl. apaisado) se toma del `sectPr`. Los campos de Word (p. ej. `PAGE`) se
-interpretan, no se vuelca su valor cacheado.
+leídas de `numbering.xml`) y con **viñeta** (con el glifo del nivel mapeado a su
+equivalente Unicode), tablas (bordes, sombreados, celdas combinadas horizontal
+**y verticalmente**, y **tablas anidadas**), saltos de página explícitos e
+**imágenes** (inline y flotantes; las flotantes con ajuste cuadrado/estrecho
+**rodean el texto** mediante `float`). El tamaño de página (incl. apaisado) se
+toma del `sectPr`. Los campos de Word (p. ej. `PAGE`) se interpretan, no se
+vuelca su valor cacheado. Los **metadatos** del documento (título, autor, asunto,
+palabras clave de `docProps/core.xml`) se trasladan a los del PDF.
 
 Resuelve además las **fuentes de tema** (`asciiTheme`, p. ej. `minorHAnsi` →
 Calibri) leyéndolas de `theme1.xml`, y la **herencia de estilos**: cada estilo
-hereda el formato (carácter y párrafo) de su `basedOn`, y se aplican los valores
-por defecto del documento (`docDefaults`). Así, el tamaño/espaciado/negrita de un
-`Heading 1` definidos solo en `styles.xml` también se respetan.
+hereda el formato (carácter y párrafo) de su `basedOn`, se aplica el **estilo de
+párrafo por defecto** (`w:default="1"`, normalmente *Normal*) a los párrafos sin
+`pStyle` explícito, y se aplican los valores por defecto del documento
+(`docDefaults`). Así, el tamaño/espaciado/negrita de un `Heading 1` definidos
+solo en `styles.xml` también se respetan.
 
 ### Paginación y motores de maquetación
 
@@ -133,9 +138,13 @@ laughs* — ni acceso a red) y hay topes defensivos frente a *zip bombs*.
 ## Desarrollo
 
 ```bash
-pip install -e .[dev]   # instala también pytest
+pip install -e .[dev]   # instala también pytest y ruff
 pytest                  # los tests cubren build_html (OOXML -> HTML), sin WeasyPrint
+ruff check .            # linter (mismo chequeo que ejecuta CI)
 ```
+
+La CI ejecuta, además, un *smoke test* de extremo a extremo
+(`tests/e2e_smoke.py`) que convierte un `.docx` real a PDF con LibreOffice.
 
 ## Estructura
 
@@ -145,9 +154,9 @@ docx2pdf_py/
   converter.py    → conversor OOXML -> HTML -> PDF (flujo propio) + dispatch de motor
   engines.py      → backends Word / LibreOffice y detección del motor
   cli.py          → comando docx2pdf-py (incluye --engine)
-tests/            → suite de pytest (no requiere WeasyPrint)
-.github/workflows → CI (pytest en varias versiones de Python)
-pyproject.toml    → metadatos y dependencias
+tests/            → suite de pytest (no requiere WeasyPrint) + e2e_smoke.py
+.github/workflows → CI (lint con ruff, pytest en varias versiones, e2e LibreOffice)
+pyproject.toml    → metadatos, dependencias y configuración de ruff
 main.py           → script de ejemplo (edita la ruta y ejecuta)
 ```
 
