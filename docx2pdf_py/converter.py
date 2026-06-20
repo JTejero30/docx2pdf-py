@@ -17,7 +17,7 @@ import os
 import re
 import sys
 import zipfile
-from typing import Optional
+from typing import Any, Optional
 
 from lxml import etree
 
@@ -202,7 +202,7 @@ def font_stack(name: Optional[str]) -> Optional[str]:
 # ----------------------------------------------------------------------------
 def rpr_dict(rpr) -> dict:
     """Extrae propiedades de carácter de un <w:rPr>."""
-    d = {}
+    d: dict[str, Any] = {}
     if rpr is None:
         return d
     fonts = first(rpr, "rFonts")
@@ -304,26 +304,25 @@ def border_css(b) -> Optional[str]:
 
 class Converter:
     def __init__(self, path: str):
-        self.z = zipfile.ZipFile(path)
+        self.z: Optional[zipfile.ZipFile] = zipfile.ZipFile(path)
         self._read_bytes = 0
         self.doc = self._require_xml_part("word/document.xml")
         self.styles = self._require_xml_part("word/styles.xml")
         self.rels = self._index_rels()
         self.theme_fonts = self._index_theme()
         self.def_rpr, self.def_ppr = self._doc_defaults()
-        self.style_ppr = {}         # styleId -> propiedades de párrafo resueltas
+        self.style_ppr: dict[str, Any] = {}  # styleId -> resolved paragraph props
         self.style_rpr = self._index_styles()
         self.num_levels = self._index_numbering()
-        # Por defecto Calibri/10 pt salvo que el documento declare otra cosa en
-        # <w:docDefaults> (fuente, tamaño, color, negrita…), que entonces gana.
-        self.default = {"font": "Calibri", "color": "#000000", "size": 10.0}
+        # Default font/size; overridden by <w:docDefaults> when present.
+        self.default: dict[str, Any] = {"font": "Calibri", "color": "#000000", "size": 10.0}
         for k in ("font", "size", "color", "bold", "italic"):
             if k in self.def_rpr and self.def_rpr[k] is not None:
                 self.default[k] = self.def_rpr[k]
-        self._img_cache = {}
-        self._pending_floats = []   # imágenes flotantes "bloque" tras el bloque
-        self._list_counters = {}    # numId -> {ilvl: contador actual}
-        self._content_started = False  # para no partir página antes del 1.er bloque
+        self._img_cache: dict[str, str] = {}
+        self._pending_floats: list[str] = []
+        self._list_counters: dict[str, Any] = {}  # numId -> {ilvl: current count}
+        self._content_started = False
 
         # cabecera/pie por tipo (default / first / even) según el sectPr
         sect = self.doc.find(w("body")).find(w("sectPr"))
@@ -353,14 +352,16 @@ class Converter:
         self.close()
         return False
 
-    def close(self):
-        """Cierra el .docx (libera el descriptor del ZIP)."""
-        if getattr(self, "z", None) is not None:
+    def close(self) -> None:
+        """Close the .docx (releases the ZIP file descriptor)."""
+        if self.z is not None:
             self.z.close()
             self.z = None
 
     # -- lectura segura del ZIP -------------------------------------------
     def _read(self, name: str) -> bytes:
+        if self.z is None:
+            raise RuntimeError("Converter is already closed")
         info = self.z.getinfo(name)
         if info.file_size > MAX_MEMBER_BYTES:
             raise ValueError(f"oversized member in .docx: {name}")
@@ -413,7 +414,7 @@ class Converter:
         tema, así que lo indexamos para resolverlas después.
         """
         theme = self._opt("word/theme/theme1.xml")
-        out = {}
+        out: dict[str, Any] = {}
         if theme is None:
             return out
         for key, tag in (("major", "majorFont"), ("minor", "minorFont")):
@@ -432,7 +433,7 @@ class Converter:
         core = self._opt("docProps/core.xml")
         if core is None:
             return {}
-        out = {}
+        out: dict[str, Any] = {}
         for key, ns, tag in (
             ("title", DC, "title"),
             ("author", DC, "creator"),
@@ -473,7 +474,7 @@ class Converter:
         Se extraen como dict para poder fusionar las del estilo (vía basedOn)
         con las propias del párrafo, igual que hace Word.
         """
-        p = {}
+        p: dict[str, Any] = {}
         if ppr is None:
             return p
         jc = first(ppr, "jc")
@@ -520,7 +521,7 @@ class Converter:
                 elif stype == "character" and self.default_rstyle is None:
                     self.default_rstyle = sid
 
-        resolved = {}
+        resolved: dict[str, Any] = {}
 
         def resolve(sid, seen):
             if sid in resolved:
@@ -536,7 +537,7 @@ class Converter:
             resolved[sid] = {"rpr": merged_rpr, "ppr": merged_ppr}
             return resolved[sid]
 
-        out = {}
+        out: dict[str, Any] = {}
         for sid in raw:
             r = resolve(sid, set())
             self._resolve_theme_font(r["rpr"])
@@ -570,7 +571,7 @@ class Converter:
                     "hanging": attr(ind, "hanging") if ind is not None else None,
                 }
             abstract[aid] = levels
-        out = {}
+        out: dict[str, Any] = {}
         for num in numx.findall(w("num")):
             nid = num.get(w("numId"))
             a = first(num, "abstractNumId")

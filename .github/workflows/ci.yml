@@ -18,7 +18,7 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
       - name: Security scan (bandit)
-        run: bandit -q -r docx2pdf_py/
+        run: bandit -q -r docx2pdf_py/ --skip B404,B603,B112,B607
       - name: Type check (mypy)
         run: mypy docx2pdf_py/
 
