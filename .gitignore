@@ -1,4 +1,4 @@
-# Entorno / build
+# Environment / build
 .venv/
 venv/
 __pycache__/
@@ -7,10 +7,15 @@ build/
 dist/
 *.egg-info/
 
-# Documentos de prueba (pueden ser confidenciales) — no subir
+# Test documents (may be confidential)
 *.docx
 *.pdf
 
-# Salidas / comparaciones
+# Output / comparison artifacts
 output.pdf
 comparacion/
+
+# Coverage reports
+.coverage
+htmlcov/
+.coverage.*
