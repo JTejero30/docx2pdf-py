@@ -93,6 +93,12 @@ docx2pdf-py
 # Batch — convert several files into a directory
 docx2pdf-py file1.docx file2.docx --output-dir pdfs/
 docx2pdf-py *.docx --output-dir pdfs/
+
+# Show a live progress bar while converting a batch
+docx2pdf-py *.docx --output-dir pdfs/ --progress
+
+# Watch mode — re-convert automatically whenever the source file changes
+docx2pdf-py input.docx output.pdf --watch
 ```
 
 ## What is reproduced
@@ -210,15 +216,26 @@ engines are appended after the built-in ones during `auto` discovery.
 ## Development
 
 ```bash
-pip install -e .[dev]   # also installs pytest and ruff
-pytest                  # tests cover build_html (OOXML -> HTML), no WeasyPrint needed
+pip install -e .[dev]   # also installs pytest, ruff, hypothesis, pytest-benchmark
+pytest                  # unit tests — cover OOXML→HTML; no WeasyPrint required
+pytest tests/test_fuzz.py           # property-based fuzz tests (requires hypothesis)
+pytest tests/benchmarks/ --benchmark-only   # performance benchmarks
+pytest tests/test_snapshots.py --update-snapshots   # regenerate HTML golden files
 ruff check .            # linter (same check that CI runs)
-mypy docx2pdf_py         # types for the API and backends
-python -m build          # sdist + wheel
+mypy docx2pdf_py        # type checking (all 15 modules, zero errors)
+python -m build         # sdist + wheel
 ```
 
 CI also runs an end-to-end smoke test (`tests/e2e_smoke.py`) that converts a
 real `.docx` to PDF with LibreOffice.
+
+Structured logging is emitted on the `docx2pdf_py` logger at `DEBUG`/`INFO`/`WARNING`
+levels, so you can see engine selection and timing by enabling it in your app:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
 
 ## Structure
 
