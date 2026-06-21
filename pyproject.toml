@@ -35,6 +35,8 @@ dev = [
     "twine>=5",
     "pypdf>=4",
     "pymupdf>=1.24",
+    "hypothesis>=6",
+    "pytest-benchmark>=4",
 ]
 
 [project.urls]
@@ -71,9 +73,6 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-module = "docx2pdf_py.converter"
-disallow_untyped_defs = false
 
 [tool.bandit]
 # All skips are false positives for this codebase:

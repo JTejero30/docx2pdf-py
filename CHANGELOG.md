@@ -3,6 +3,17 @@
 All notable changes to this project are documented here.
 The format follows, loosely, [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- Structured logging via Python's built-in `logging` module (`logging.getLogger("docx2pdf_py")`)
+- Full type annotations for `docx2pdf_py/converter.py`; mypy now checks the module at full strictness
+- `--progress` flag for CLI batch mode: displays a live progress bar on stderr
+- `--watch` flag for CLI single-file mode: re-converts automatically when the source file changes
+- Property-based fuzz tests (`tests/test_fuzz.py`) using Hypothesis for OOXML parsing utilities
+- Performance benchmark suite (`tests/benchmarks/test_perf.py`) using pytest-benchmark
+- Golden-file snapshot tests (`tests/test_snapshots.py`) for the OOXML→HTML pipeline
+
 ## [0.2.0] — Unreleased
 
 ### Added

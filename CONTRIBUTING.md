@@ -113,3 +113,26 @@ Please open an issue and include:
 ## License
 
 By contributing you agree that your changes will be licensed under the [MIT License](LICENSE).
+
+## Architecture
+
+### Conversion pipeline
+
+The conversion pipeline has three stages:
+
+1. **OOXML parsing** (`ooxml.py`, `converter.py`): The `.docx` ZIP is opened by `OOXMLPackage`, which enforces size limits against zip-bomb attacks. `Converter` (a subclass) traverses the OOXML XML tree and builds an HTML string. Styles, numbering, themes, fonts, and section geometry are indexed on `__init__` so the per-element render methods can work in a single pass.
+
+2. **HTML→PDF rendering** (`converter.py`, `_weasy_worker.py`): The HTML string produced by `Converter.build_html()` is written to a temporary file. A subprocess runs WeasyPrint in a worker module so that a hard timeout can kill native rendering threads without leaving them alive in the parent process.
+
+3. **Output publication** (`output.py`): The rendered PDF is validated (page count extracted via pypdf/pymupdf) and atomically moved to the final output path.
+
+### Engine registry
+
+Backend engines are discovered via `importlib.metadata` entry points under the `docx2pdf_py.engines` group (see `backends.py`). The `convert_detailed` function in `api.py` selects and sequences backends according to the `engine` argument and the `fallback` policy in `ConversionOptions`.
+
+### Key design decisions
+
+- **No shell=True**: All subprocess calls pass an explicit argument list to prevent injection attacks.
+- **Hardened ZIP reading**: `OOXMLPackage` enforces per-member and total decompressed-size limits, rejects path-traversal names, and caps the XML element count to prevent quadratic-blowup attacks.
+- **Structured logging**: All conversion events are emitted via `logging.getLogger("docx2pdf_py")`. Applications can control verbosity by configuring the logger; the library itself never calls `logging.basicConfig`.
+- **Snapshot tests**: Golden HTML files in `tests/snapshots/` pin rendering output for regressions. Run `pytest --update-snapshots` to regenerate them after intentional changes.

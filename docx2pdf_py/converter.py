@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from lxml import etree
 
@@ -129,21 +129,21 @@ class Converter(OOXMLPackage):
                          and settings.find(w("evenAndOddHeaders")) is not None)
 
     # -- context manager / recursos ---------------------------------------
-    def __enter__(self):
+    def __enter__(self) -> "Converter":
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc: Any) -> "Literal[False]":
         self.close()
         return False
 
-    def _index_rels(self) -> dict:
+    def _index_rels(self) -> dict[str, str]:
         try:
             root = self._xml_part("word/_rels/document.xml.rels")
         except KeyError:
             return {}
         return {r.get("Id"): r.get("Target") for r in root}
 
-    def _ref_part(self, sect, tag: str, type_: str = "default"):
+    def _ref_part(self, sect: Any, tag: str, type_: str = "default") -> Any:
         """Carga la parte (header/footer) referenciada con el type dado."""
         if sect is None:
             return None
@@ -156,7 +156,7 @@ class Converter(OOXMLPackage):
         return None
 
     # -- tema / valores por defecto / herencia de estilos -----------------
-    def _index_theme(self) -> dict:
+    def _index_theme(self) -> dict[str, Any]:
         """{'major': 'Calibri Light', 'minor': 'Calibri'} desde theme1.xml.
 
         Word suele referirse a las fuentes por tema (asciiTheme="minorHAnsi")
@@ -175,7 +175,7 @@ class Converter(OOXMLPackage):
                     out[key] = latin.get("typeface")
         return out
 
-    def _doc_metadata(self) -> dict:
+    def _doc_metadata(self) -> dict[str, str]:
         """Título/autor/asunto/palabras clave desde docProps/core.xml.
 
         WeasyPrint los traslada a los metadatos del PDF vía <title>/<meta>.
@@ -196,7 +196,7 @@ class Converter(OOXMLPackage):
                 out[key] = el.text.strip()
         return out
 
-    def _resolve_theme_font(self, d: dict) -> None:
+    def _resolve_theme_font(self, d: dict[str, Any]) -> None:
         """Si el dict de formato apunta a una fuente de tema, fija su nombre."""
         if not d.get("font") and d.get("font_theme"):
             key = "major" if d["font_theme"].startswith("major") else "minor"
@@ -204,7 +204,7 @@ class Converter(OOXMLPackage):
             if name:
                 d["font"] = name
 
-    def _doc_defaults(self):
+    def _doc_defaults(self) -> tuple[dict[str, Any], dict[str, Any]]:
         """Formato por defecto del documento (<w:docDefaults>): (rPr, pPr)."""
         dd = first(self.styles, "docDefaults")
         rpr_def, ppr_def = {}, {}
@@ -218,7 +218,7 @@ class Converter(OOXMLPackage):
                 ppr_def = self._ppr_layout(first(pprd, "pPr"))
         return rpr_def, ppr_def
 
-    def _ppr_layout(self, ppr) -> dict:
+    def _ppr_layout(self, ppr: Any) -> dict[str, Any]:
         """Propiedades de párrafo heredables (alineación, espaciado, sangría).
 
         Se extraen como dict para poder fusionar las del estilo (vía basedOn)
@@ -245,7 +245,7 @@ class Converter(OOXMLPackage):
                     p[k] = attr(ind, k)
         return p
 
-    def _index_styles(self) -> dict:
+    def _index_styles(self) -> dict[str, Any]:
         """styleId -> rPr resuelto; rellena self.style_ppr con el pPr resuelto.
 
         Resuelve la cadena ``w:basedOn`` para que un estilo herede el formato
@@ -273,7 +273,7 @@ class Converter(OOXMLPackage):
 
         resolved: dict[str, Any] = {}
 
-        def resolve(sid, seen):
+        def resolve(sid: Any, seen: set[str]) -> dict[str, Any]:
             if sid in resolved:
                 return resolved[sid]
             node = raw.get(sid)
@@ -295,13 +295,13 @@ class Converter(OOXMLPackage):
             self.style_ppr[sid] = r["ppr"]
         return out
 
-    def _index_numbering(self) -> dict:
+    def _index_numbering(self) -> dict[str, Any]:
         """numId -> {ilvl: {fmt, text, start, left, hanging}} desde numbering.xml."""
         try:
             numx = self._xml_part("word/numbering.xml")
         except KeyError:
             return {}
-        def parse_level(lvl):
+        def parse_level(lvl: Any) -> dict[str, Any]:
             fmt = first(lvl, "numFmt")
             txt = first(lvl, "lvlText")
             start = first(lvl, "start")
@@ -344,13 +344,13 @@ class Converter(OOXMLPackage):
                 out[nid] = levels
         return out
 
-    def _bullet_glyph(self, num_id, ilvl: int) -> str:
+    def _bullet_glyph(self, num_id: Any, ilvl: int) -> str:
         """Glifo de viñeta del nivel (mapeado a un equivalente Unicode)."""
         level = self.num_levels.get(num_id, {}).get(ilvl)
         text = (level or {}).get("text") or ""
         return BULLET_GLYPHS.get(text.strip(), "•") if text.strip() else "•"
 
-    def _list_marker(self, num_id, ilvl: int) -> Optional[str]:
+    def _list_marker(self, num_id: Any, ilvl: int) -> Optional[str]:
         """Marcador de lista numerada (p.ej. '1.', 'a)', 'IV.') o None si viñeta."""
         levels = self.num_levels.get(num_id)
         if not levels:
@@ -364,7 +364,7 @@ class Converter(OOXMLPackage):
             del counters[deeper]  # reiniciar niveles más profundos
         text = level["text"] or ("%" + str(ilvl + 1) + ".")
 
-        def repl(m):
+        def repl(m: re.Match[str]) -> str:
             idx = int(m.group(1)) - 1  # %1 -> nivel 0
             ldef = levels.get(idx, level)
             val = counters.get(idx, ldef["start"])
@@ -373,7 +373,7 @@ class Converter(OOXMLPackage):
         return re.sub(r"%(\d)", repl, text)
 
     # -- runs --------------------------------------------------------------
-    def render_runs(self, p, base: dict) -> str:
+    def render_runs(self, p: Any, base: dict[str, Any]) -> str:
         """HTML de los runs de un párrafo, heredando 'base' (rPr de su estilo).
 
         Ignora los campos (fldChar/instrText) y su valor cacheado: p.ej. el
@@ -415,7 +415,7 @@ class Converter(OOXMLPackage):
                     parts.append(f'<span class="equation">{esc(equation)}</span>')
         return "".join(parts)
 
-    def _render_run(self, r, base: dict) -> str:
+    def _render_run(self, r: Any, base: dict[str, Any]) -> str:
         d = dict(base)
         d.update(rpr_dict(first(r, "rPr")))
         self._resolve_theme_font(d)
@@ -491,7 +491,7 @@ class Converter(OOXMLPackage):
                 self._img_cache[target] = f"data:image/{mime};base64,{encoded}"
         return self._img_cache[target]
 
-    def _img_html(self, drawing, style: str) -> str:
+    def _img_html(self, drawing: Any, style: str) -> str:
         blip = drawing.find(".//" + f"{{{A}}}blip")
         if blip is None:
             return ""
@@ -505,10 +505,10 @@ class Converter(OOXMLPackage):
                     f"height:{emu_pt(ext.get('cy')):.1f}pt;")
         return f'<img src="{self._image_src(target)}" style="{style}{dims}">'
 
-    def _render_drawing(self, drawing) -> str:
+    def _render_drawing(self, drawing: Any) -> str:
         return self._img_html(drawing, BLOCK_IMG_STYLE)
 
-    def _render_anchor(self, drawing):
+    def _render_anchor(self, drawing: Any) -> tuple[str, bool]:
         """Imagen flotante (wp:anchor). Devuelve (html, wraps).
 
         Con ajuste cuadrado/estrecho/transparente la maquetamos con ``float``
@@ -534,7 +534,7 @@ class Converter(OOXMLPackage):
         return self._render_drawing(drawing), False
 
     # -- párrafos ----------------------------------------------------------
-    def render_paragraph(self, p, in_cell: bool = False) -> str:
+    def render_paragraph(self, p: Any, in_cell: bool = False) -> str:
         ppr = first(p, "pPr")
         style_id = None
         base = dict(self.default)
@@ -662,7 +662,7 @@ class Converter(OOXMLPackage):
         return f'<p style="{";".join(css)}">{inner}</p>'
 
     # -- tablas ------------------------------------------------------------
-    def render_table(self, tbl) -> str:
+    def render_table(self, tbl: Any) -> str:
         tblpr = first(tbl, "tblPr")
         tblw = first(tblpr, "tblW") if tblpr is not None else None
         style = ["border-collapse:collapse", "table-layout:fixed"]
@@ -740,7 +740,7 @@ class Converter(OOXMLPackage):
         body = f'<tbody>{"".join(rows[header_count:])}</tbody>'
         return f'<table style="{";".join(style)}">{cols}{head}{body}</table>'
 
-    def _render_cell(self, tc, tblbdr, rowspan: int = 1) -> str:
+    def _render_cell(self, tc: Any, tblbdr: Any, rowspan: int = 1) -> str:
         tcpr = first(tc, "tcPr")
         css = ["vertical-align:top"]
         spanattr = ""
@@ -790,7 +790,7 @@ class Converter(OOXMLPackage):
         return f'<td{spanattr} style="{";".join(css)}">{inner}</td>'
 
     # -- cabecera / pie ----------------------------------------------------
-    def _hf_div(self, root, width_cm: float, is_footer: bool, name: str) -> str:
+    def _hf_div(self, root: Any, width_cm: float, is_footer: bool, name: str) -> str:
         """Renderiza una cabecera/pie como elemento ``running(name)``."""
         if root is None:
             return ""
@@ -827,7 +827,7 @@ class Converter(OOXMLPackage):
         return f"@{where} {{ content: element({elem_name}); }}"
 
     # -- documento completo ------------------------------------------------
-    def _render_notes(self, root, kind: str) -> str:
+    def _render_notes(self, root: Any, kind: str) -> str:
         if root is None:
             return ""
         entries = []
@@ -863,7 +863,7 @@ class Converter(OOXMLPackage):
         section_blocks: list[str] = []
         section_specs: list[Any] = []
 
-        def finish_section(spec):
+        def finish_section(spec: Any) -> None:
             if not section_blocks:
                 return
             index = len(section_specs)
@@ -904,7 +904,7 @@ class Converter(OOXMLPackage):
         # running element con nombre propio y se asocia a su regla @page.
         divs = []
 
-        def emit(root, is_footer, name):
+        def emit(root: Any, is_footer: bool, name: str) -> Optional[str]:
             html = self._hf_div(root, content_cm, is_footer, name)
             if html:
                 divs.append(html)

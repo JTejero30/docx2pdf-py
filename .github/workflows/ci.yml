@@ -36,7 +36,7 @@ jobs:
       # Tests exercise build_html (OOXML -> HTML) and only need lxml;
       # WeasyPrint (and its native libraries) is not required for the suite.
       - name: Install test deps
-        run: pip install --no-deps -e . && pip install lxml pytest pytest-cov
+        run: pip install --no-deps -e . && pip install lxml pytest pytest-cov hypothesis
       - name: Run tests with coverage
         run: python -m pytest -q --cov=docx2pdf_py --cov-report=term-missing --cov-fail-under=80
 
@@ -90,6 +90,19 @@ jobs:
         run: |
           E2E_ENGINE=weasyprint python tests/e2e_smoke.py
           E2E_ENGINE=weasyprint python tests/e2e_fidelity.py
+
+
+  benchmark:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - name: Install benchmark deps
+        run: pip install --no-deps -e . && pip install lxml pytest pytest-benchmark
+      - name: Run benchmarks (sanity check only)
+        run: python -m pytest tests/benchmarks/ -q --benchmark-disable
 
   package:
     runs-on: ubuntu-latest

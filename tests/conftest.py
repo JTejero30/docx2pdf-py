@@ -1,7 +1,14 @@
 """Utilities for building minimal in-memory .docx files for tests."""
+
 import zipfile
 
 import pytest
+
+
+def pytest_addoption(parser):
+    parser.addoption("--update-snapshots", action="store_true", default=False,
+                     help="regenerate snapshot files")
+
 
 NS = (
     'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" '
