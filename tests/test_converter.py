@@ -176,7 +176,7 @@ def test_page_break(make_docx):
     body = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>'
     with Converter(make_docx(document(body))) as conv:
         html = conv.build_html()
-    assert "break-after:page" in html
+    assert "break-before:page" in html
 
 
 # -- tablas -----------------------------------------------------------------
