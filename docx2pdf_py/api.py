@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import time
 import zipfile
@@ -21,6 +22,8 @@ from .models import (
     ConversionResult,
 )
 from .output import Pathish, validate_pdf
+
+_log = logging.getLogger("docx2pdf_py")
 
 _ENGINE_ALIASES = {
     "auto": "auto",
@@ -65,6 +68,7 @@ def convert_detailed(
 ) -> ConversionResult:
     """Convert a document and return backend attempts and output diagnostics."""
     started = time.perf_counter()
+    _log.debug("converting %s → engine=%s", in_path, engine)
     options = options or ConversionOptions.from_environment()
     registry = tuple(load_engine_registry() if engine_registry is None else engine_registry)
     by_name = {backend.name.lower(): backend for backend in registry}
@@ -128,12 +132,16 @@ def convert_detailed(
             if not can_fallback:
                 raise
             warnings.append(f"engine '{backend.name}' failed ({exc}); trying next")
+            _log.warning("engine '%s' failed (%s); trying next", backend.name, exc)
             continue
 
         attempts.append(
             ConversionAttempt(
                 backend.name, True, time.perf_counter() - attempt_started
             )
+        )
+        _log.info(
+            "converted %s in %.3fs via %s", in_path, time.perf_counter() - started, backend.name
         )
         return _result(in_path, path, backend.name, started, warnings, attempts)
 
@@ -161,6 +169,7 @@ def convert_batch(
     on_progress: Callable[[BatchItemResult], None] | None = None,
 ) -> tuple[BatchItemResult, ...]:
     """Convert multiple documents concurrently with stable, collision-safe names."""
+    _log.debug("batch: %d files → %s (workers=%d)", len(inputs), output_directory, max_workers)
     if max_workers < 1:
         raise ValueError("max_workers must be at least 1")
     destination = Path(output_directory)

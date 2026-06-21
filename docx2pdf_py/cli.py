@@ -5,6 +5,7 @@ import argparse
 import glob
 import os
 import sys
+import time
 from collections.abc import Sequence
 from dataclasses import replace
 
@@ -12,6 +13,22 @@ from . import __version__
 from .api import convert_batch, convert_detailed
 from .exceptions import Docx2PdfError
 from .models import ConversionOptions
+
+
+class _ProgressBar:
+    def __init__(self, total: int) -> None:
+        self._total = total
+        self._done = 0
+
+    def advance(self) -> None:
+        self._done += 1
+        width = 30
+        filled = int(width * self._done / max(self._total, 1))
+        bar = "=" * filled + "-" * (width - filled)
+        print(f"\r[{bar}] {self._done}/{self._total}", end="", flush=True, file=sys.stderr)
+
+    def finish(self) -> None:
+        print(file=sys.stderr)  # newline
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -75,6 +92,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="store_true",
         help="show additional details during conversion",
     )
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help="show a live progress bar on stderr (batch mode only)",
+    )
+    parser.add_argument(
+        "--watch",
+        action="store_true",
+        help="re-convert when the source file changes (single-file mode only)",
+    )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
@@ -84,6 +111,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     # ── Batch mode ────────────────────────────────────────────────────────────
     if args.output_dir is not None:
+        if args.watch:
+            parser.error("--watch is not supported in batch mode (--output-dir)")
         srcs = list(args.inputs)
         if not srcs:
             srcs = sorted(glob.glob("*.docx"))
@@ -98,7 +127,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not os.path.exists(src):
                 parser.error(f"file not found: {src}")
 
+        pbar = _ProgressBar(len(srcs)) if args.progress else None
+
         def _progress(item) -> None:  # type: ignore[no-untyped-def]
+            if pbar is not None:
+                pbar.advance()
             if args.quiet:
                 return
             if item.succeeded:
@@ -124,6 +157,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             max_workers=args.workers,
             on_progress=_progress,
         )
+        if pbar is not None:
+            pbar.finish()
         failures = [r for r in results if r.failed]
         return 1 if failures else 0
 
@@ -150,7 +185,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if not os.path.exists(src):
         parser.error(f"file not found: {src}")
-    if os.path.exists(out) and not args.force:
+    if os.path.exists(out) and not args.force and not args.watch:
         parser.error(f"output already exists: {out} (use -f to overwrite)")
 
     if args.verbose and not args.quiet:
@@ -178,6 +213,31 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print(
                     f"Attempt: {attempt.engine} | {attempt.elapsed_seconds:.3f}s | {status}"
                 )
+
+    if args.watch:
+        if not args.quiet:
+            print(f"[docx2pdf-py] watching {src} for changes... (Ctrl+C to stop)", file=sys.stderr)
+        last_mtime = os.path.getmtime(src)
+        try:
+            while True:
+                time.sleep(1)
+                try:
+                    mtime = os.path.getmtime(src)
+                except OSError:
+                    continue
+                if mtime != last_mtime:
+                    last_mtime = mtime
+                    if not args.quiet:
+                        print("[docx2pdf-py] change detected, re-converting...", file=sys.stderr)
+                    try:
+                        convert_detailed(src, out, engine=args.engine, options=options)
+                        if not args.quiet:
+                            print(f"OK {src} -> {out}")
+                    except (Docx2PdfError, OSError) as exc:
+                        print(f"ERR {exc}", file=sys.stderr)
+        except KeyboardInterrupt:
+            if not args.quiet:
+                print("\n[docx2pdf-py] stopped", file=sys.stderr)
 
     return 0
 

@@ -19,3 +19,6 @@ comparacion/
 .coverage
 htmlcov/
 .coverage.*
+
+# Claude Code agent worktree metadata
+.claude/
