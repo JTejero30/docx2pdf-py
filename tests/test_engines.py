@@ -172,7 +172,7 @@ def test_load_engine_registry_skips_builtin_entry_points(monkeypatch):
         def load(self):
             raise AssertionError("should not be loaded")
 
-    monkeypatch.setattr(B, "entry_points", lambda group: [_FakeEP()])
+    monkeypatch.setattr(B, "_get_group_eps", lambda: [_FakeEP()])
     registry = B.load_engine_registry()
     assert len(registry) == len(B.BUILTIN_ENGINES)
 
@@ -188,7 +188,7 @@ def test_load_engine_registry_logs_broken_entry_point(monkeypatch, caplog):
         def load(self):
             raise ImportError("missing dep")
 
-    monkeypatch.setattr(B, "entry_points", lambda group: [_BadEP()])
+    monkeypatch.setattr(B, "_get_group_eps", lambda: [_BadEP()])
     with caplog.at_level(logging.WARNING, logger="docx2pdf_py.backends"):
         registry = B.load_engine_registry()
     assert len(registry) == len(B.BUILTIN_ENGINES)

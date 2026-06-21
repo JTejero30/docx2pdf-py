@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
-from importlib.metadata import entry_points
+from importlib.metadata import EntryPoint, entry_points
 from typing import cast
 
 from . import engines
@@ -68,6 +69,18 @@ BUILTIN_ENGINES: tuple[ConversionEngine, ...] = (
 )
 
 _BUILTIN_NAMES = frozenset(e.name for e in BUILTIN_ENGINES)
+_EP_GROUP = "docx2pdf_py.engines"
+
+
+def _get_group_eps() -> list[EntryPoint]:
+    """Return entry points for this package's engine group, Python 3.9+ safe.
+
+    ``entry_points(group=...)`` keyword selection was added in Python 3.10.
+    On 3.9 the function returns a plain dict and must be indexed by group name.
+    """
+    if sys.version_info < (3, 10):
+        return list(entry_points().get(_EP_GROUP, []))
+    return list(entry_points(group=_EP_GROUP))
 
 
 def load_engine_registry() -> tuple[ConversionEngine, ...]:
@@ -78,7 +91,7 @@ def load_engine_registry() -> tuple[ConversionEngine, ...]:
     re-registering a built-in has no effect.
     """
     extra: list[ConversionEngine] = []
-    for ep in entry_points(group="docx2pdf_py.engines"):
+    for ep in _get_group_eps():
         if ep.name in _BUILTIN_NAMES:
             continue
         try:
