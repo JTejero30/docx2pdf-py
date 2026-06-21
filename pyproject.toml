@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "docx2pdf-py"
-version = "0.1.0"
+version = "0.2.0"
 description = "Faithful .docx to PDF conversion using pure Python (lxml + WeasyPrint)."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -19,7 +19,7 @@ classifiers = [
     "Topic :: Text Processing :: Markup",
 ]
 dependencies = [
-    "weasyprint>=60,<72",
+    "weasyprint>=60,<80",
     "lxml>=5,<8",
 ]
 
@@ -41,6 +41,11 @@ dev = [
 Homepage = "https://github.com/antoniolujanoluna/docx2pdf-py"
 Repository = "https://github.com/antoniolujanoluna/docx2pdf-py"
 Issues = "https://github.com/antoniolujanoluna/docx2pdf-py/issues"
+
+[project.entry-points."docx2pdf_py.engines"]
+word = "docx2pdf_py.backends:WordEngine"
+libreoffice = "docx2pdf_py.backends:LibreOfficeEngine"
+weasyprint = "docx2pdf_py.backends:WeasyPrintEngine"
 
 [project.scripts]
 docx2pdf-py = "docx2pdf_py.cli:main"
@@ -81,5 +86,5 @@ skips = ["B404", "B603", "B112", "B607"]
 source = ["docx2pdf_py"]
 
 [tool.coverage.report]
-fail_under = 80
+fail_under = 85
 show_missing = true

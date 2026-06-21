@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import shutil
 from dataclasses import dataclass
 from threading import Event
 
 import pytest
 
-from docx2pdf_py import ConversionOptions, convert_batch
+from docx2pdf_py import BatchItemResult, ConversionOptions, convert_batch
 from docx2pdf_py import converter as C
-from docx2pdf_py.api import convert_detailed
+from docx2pdf_py.api import convert_batch_async, convert_detailed
 from tests.conftest import FAKE_PDF, document
 
 
@@ -141,3 +142,69 @@ def test_batch_conversion_collision_names_and_cancellation(
     cancelled.set()
     stopped = convert_batch([first], tmp_path / "cancelled", cancel_event=cancelled)
     assert stopped[0].cancelled
+
+
+def test_batch_progress_callback_called_for_each_item(make_docx, tmp_path, monkeypatch):
+    original = make_docx(document("<w:p/>"))
+
+    def render(_input, output, options=None):
+        with open(output, "wb") as stream:
+            stream.write(FAKE_PDF)
+        return str(output)
+
+    monkeypatch.setattr(C, "_convert_weasyprint", render)
+
+    seen: list[BatchItemResult] = []
+    results = convert_batch(
+        [original],
+        tmp_path / "pdfs",
+        engine="weasyprint",
+        on_progress=seen.append,
+    )
+    assert len(seen) == 1
+    assert seen[0].succeeded
+    assert seen[0] is results[0]
+
+
+def test_batch_item_result_succeeded_and_failed_properties(make_docx, tmp_path, monkeypatch):
+    original = make_docx(document("<w:p/>"))
+
+    def render(_input, output, options=None):
+        with open(output, "wb") as stream:
+            stream.write(FAKE_PDF)
+        return str(output)
+
+    monkeypatch.setattr(C, "_convert_weasyprint", render)
+    results = convert_batch([original], tmp_path / "ok", engine="weasyprint")
+    assert results[0].succeeded
+    assert not results[0].failed
+
+    broken = make_docx(document("<w:p/>"))
+    monkeypatch.setattr(C, "_convert_weasyprint",
+                        lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+    err_results = convert_batch([broken], tmp_path / "err", engine="weasyprint")
+    assert not err_results[0].succeeded
+    assert err_results[0].failed
+
+    cancelled_event = Event()
+    cancelled_event.set()
+    cancelled_results = convert_batch([original], tmp_path / "cancelled",
+                                      cancel_event=cancelled_event)
+    assert not cancelled_results[0].succeeded
+    assert not cancelled_results[0].failed
+
+
+def test_convert_batch_async_returns_same_results(make_docx, tmp_path, monkeypatch):
+    original = make_docx(document("<w:p/>"))
+
+    def render(_input, output, options=None):
+        with open(output, "wb") as stream:
+            stream.write(FAKE_PDF)
+        return str(output)
+
+    monkeypatch.setattr(C, "_convert_weasyprint", render)
+    results = asyncio.run(
+        convert_batch_async([original], tmp_path / "async_pdfs", engine="weasyprint")
+    )
+    assert len(results) == 1
+    assert results[0].succeeded
