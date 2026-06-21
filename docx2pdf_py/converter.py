@@ -614,9 +614,12 @@ class Converter(OOXMLPackage):
             css.append("font-weight:bold")
         css = [c for c in css if c]
 
-        # salto de página explícito (<w:br w:type="page"/>) dentro del párrafo
+        # salto de página explícito (<w:br w:type="page"/>) dentro del párrafo.
+        # Usamos break-before para que el contenido del párrafo aparezca en la
+        # página siguiente; break-after dejaría el texto en la página actual y
+        # generaría una página vacía al final que WeasyPrint puede colapsar.
         if p.find(".//" + w("br") + "[@" + w("type") + "='page']") is not None:
-            css.append("break-after:page")
+            css.append("break-before:page")
 
         # salto de sección que inicia página nueva (sectPr en el pPr, salvo el
         # "continuo"): en Word marca un límite de página, lo forzamos también.
