@@ -101,3 +101,13 @@ class BatchItemResult:
     result: ConversionResult | None = None
     error: str | None = None
     cancelled: bool = False
+
+    @property
+    def succeeded(self) -> bool:
+        """True when the conversion completed without error or cancellation."""
+        return self.result is not None and not self.cancelled
+
+    @property
+    def failed(self) -> bool:
+        """True when the conversion produced an error."""
+        return self.error is not None

@@ -1,215 +1,249 @@
 # docx2pdf-py
 
-Conversión **fiel** de `.docx` a PDF. El motor por defecto es **solo Python**
-(sin dependencias externas): lee el OOXML del documento (estilos reales: fuentes,
-colores, bordes, sombreados, tablas, imágenes, cabecera/pie) y lo recrea como
-HTML que **WeasyPrint** pagina a PDF.
+**Faithful** `.docx` to PDF conversion. The default engine is **pure Python**
+(no external dependencies): reads the OOXML from the document (real styles:
+fonts, colours, borders, shading, tables, images, headers/footers) and
+recreates it as HTML that **WeasyPrint** lays out and paginates into a PDF.
 
 ```
-.docx ──► leer OOXML (lxml) ──► HTML+CSS ──► WeasyPrint ──► PDF
+.docx ──► read OOXML (lxml) ──► HTML+CSS ──► WeasyPrint ──► PDF
 ```
 
-Si en el sistema hay un **motor de maquetación real** (Microsoft Word o
-LibreOffice), `convert()` lo aprovecha para obtener paginación fiel —**el mismo
-contenido por página** que el documento—; si no, usa el flujo propio. Ver
-[Paginación y motores de maquetación](#paginación-y-motores-de-maquetación).
+If a **real layout engine** (Microsoft Word or LibreOffice) is available on the
+system, `convert()` uses it to obtain faithful pagination — **the same content
+per page** as the document; otherwise it falls back to the built-in flow.
+See [Pagination and layout engines](#pagination-and-layout-engines).
 
-## Instalación
+## Installation
 
 ```bash
-pip install -e .            # desde el repo (modo desarrollo)
-# o, una vez publicado:
+pip install -e .            # from the repo (development mode)
+# or, once published:
 # pip install docx2pdf-py
 ```
 
-Dependencias: `weasyprint` y `lxml` (se instalan solas).
+Dependencies: `weasyprint` and `lxml` (installed automatically).
 
-### Fuentes (importante para la fidelidad)
+### Fonts (important for fidelity)
 
-Si el documento usa **Calibri**/**Georgia** (no libres), instala sus equivalentes
-métricamente compatibles **Carlito** y **Gelasio** en el sistema; WeasyPrint los
-descubre vía fontconfig y los **incrusta** en el PDF. Instrucciones en
-`requirements.txt`. Otras fuentes se usan si están instaladas.
+If the document uses **Calibri** / **Georgia** (non-free), install their
+metrically compatible free equivalents **Carlito** and **Gelasio** on the
+system; WeasyPrint discovers them via fontconfig and **embeds** them in the
+PDF. See `requirements.txt` for instructions. Other fonts are used if
+installed.
 
-## Uso
+## Usage
 
-Como librería:
+As a library:
 
 ```python
 from docx2pdf_py import convert
 
-convert("entrada.docx", "salida.pdf")
+convert("input.docx", "output.pdf")
 ```
 
-Para conocer el motor que terminó la conversión y los fallos recuperables de
-`auto`, usa la API detallada:
+To know which engine was actually used and surface recoverable failures from
+`auto`, use the detailed API:
 
 ```python
 from docx2pdf_py import ConversionOptions, convert_detailed
 
 result = convert_detailed(
-    "entrada.docx",
-    "salida.pdf",
+    "input.docx",
+    "output.pdf",
     options=ConversionOptions(weasyprint_timeout=60, respect_page_hints=False),
 )
 print(result.engine, result.warnings)
 print(result.page_count, result.elapsed_seconds, result.attempts)
 ```
 
-La política de fallback puede ser `always` (predeterminada),
-`unavailable-only` o `never`. Para lotes hay una API concurrente, acotada y
-cancelable:
+The fallback policy can be `always` (default), `unavailable-only`, or `never`.
+For batch jobs there is a concurrent, bounded, and cancellable API:
 
 ```python
 from docx2pdf_py import convert_batch
 
-items = convert_batch(["a.docx", "b.docx"], "pdfs", max_workers=2)
+items = convert_batch(
+    ["a.docx", "b.docx"],
+    "pdfs",
+    max_workers=2,
+    on_progress=lambda r: print(r.input_path, "done" if r.succeeded else r.error),
+)
 for item in items:
     print(item.input_path, item.result or item.error)
 ```
 
-Como comando:
+An async wrapper is also available for use in async codebases (FastAPI, etc.):
 
-```bash
-docx2pdf-py entrada.docx salida.pdf
-docx2pdf-py                      # usa el primer .docx del directorio -> output.pdf
+```python
+from docx2pdf_py import convert_batch_async
+
+items = await convert_batch_async(["a.docx", "b.docx"], "pdfs")
 ```
 
-## Qué reproduce
+As a command:
 
-Portada, cabecera/pie (incluidas las variantes **primera página** y
-**pares/impares** vía `titlePg` / `evenAndOddHeaders`) con número de página,
-encabezados, párrafos con fuente/color/negrita/cursiva/alineación, **resaltado**
-(`w:highlight`), **mayúsculas/versalitas** (`w:caps`/`w:smallCaps`),
-**hipervínculos** (con su URL real), **listas numeradas** (`1.`, `a)`, `IV.`…
-leídas de `numbering.xml`) y con **viñeta** (con el glifo del nivel mapeado a su
-equivalente Unicode), tablas (bordes, sombreados, celdas combinadas horizontal
-**y verticalmente**, y **tablas anidadas**), saltos de página explícitos e
-**imágenes** (inline y flotantes; las flotantes con ajuste cuadrado/estrecho
-**rodean el texto** mediante `float`). El tamaño de página (incl. apaisado) se
-toma del `sectPr`. Los campos de Word (p. ej. `PAGE`) se interpretan, no se
-vuelca su valor cacheado. Los **metadatos** del documento (título, autor, asunto,
-palabras clave de `docProps/core.xml`) se trasladan a los del PDF.
-También reproduce overrides y reinicios de numeración, notas al pie y finales,
-texto insertado por cambios controlados, cuadros de texto, ecuaciones textuales,
-documentos multicolumna, geometría por sección y cabeceras de tabla repetibles.
+```bash
+# Single file
+docx2pdf-py input.docx output.pdf
 
-Resuelve además las **fuentes de tema** (`asciiTheme`, p. ej. `minorHAnsi` →
-Calibri) leyéndolas de `theme1.xml`, y la **herencia de estilos**: cada estilo
-hereda el formato (carácter y párrafo) de su `basedOn`, se aplica el **estilo de
-párrafo por defecto** (`w:default="1"`, normalmente *Normal*) a los párrafos sin
-`pStyle` explícito, y se aplican los valores por defecto del documento
-(`docDefaults`). Así, el tamaño/espaciado/negrita de un `Heading 1` definidos
-solo en `styles.xml` también se respetan.
+# Auto-discover the first .docx in the current directory
+docx2pdf-py
 
-### Paginación y motores de maquetación
+# Batch — convert several files into a directory
+docx2pdf-py file1.docx file2.docx --output-dir pdfs/
+docx2pdf-py *.docx --output-dir pdfs/
+```
 
-Un `.docx` **no guarda páginas fijas**: las calcula el motor de maquetación al
-renderizar. Por eso `convert()` elige motor según lo que haya en el sistema (con
-el parámetro `engine`):
+## What is reproduced
 
-| `engine`        | Paginación                                   | Requisitos |
-|-----------------|----------------------------------------------|------------|
-| `auto` (def.)   | la mejor disponible                          | —          |
-| `word`          | **idéntica a Word** (mismo contenido/página) | Word (Windows/macOS) |
-| `libreoffice`   | **fiel** a como LibreOffice renderiza         | LibreOffice (`soffice`) |
-| `weasyprint`    | aproximada (flujo propio lxml + WeasyPrint)  | WeasyPrint |
+Cover page, headers/footers (including the **first-page** and **odd/even**
+variants via `titlePg` / `evenAndOddHeaders`) with page numbers, headings,
+paragraphs with font/colour/bold/italic/alignment, **highlighting**
+(`w:highlight`), **caps/small-caps** (`w:caps` / `w:smallCaps`),
+**hyperlinks** (with the real URL), **numbered lists** (`1.`, `a)`, `IV.` …
+read from `numbering.xml`) and **bulleted lists** (with the level glyph mapped
+to its Unicode equivalent), tables (borders, shading, horizontally and
+**vertically merged cells**, and **nested tables**), explicit page breaks, and
+**images** (inline and floating; floating images with square/tight wrapping
+**flow around text** via `float`). The page size (including landscape) is
+taken from `sectPr`. Word fields (e.g. `PAGE`) are interpreted, not dumped
+from cache. Document **metadata** (title, author, subject, keywords from
+`docProps/core.xml`) is transferred to the PDF metadata.
+Also reproduced: numbering overrides and restarts, footnotes and endnotes,
+tracked-change inserted text, text boxes, text equations, multi-column
+documents, per-section geometry, and repeatable table header rows.
 
-En modo `auto` se prueba **Word → LibreOffice → WeasyPrint**: si hay un motor
-real, el PDF tiene **el mismo contenido por página** que el documento; si no, o
-si el motor real falla, se recurre al flujo propio (con un aviso por *stderr*).
-LibreOffice usa su propio motor (muy parecido a Word, no garantizado idéntico).
-En todos los casos, las fuentes que falten se sustituyen, igual que al abrir el
-documento en una máquina sin esas fuentes.
+Theme fonts (`asciiTheme`, e.g. `minorHAnsi` → Calibri) are resolved from
+`theme1.xml`, and **style inheritance** is fully applied: each style inherits
+formatting (character and paragraph) from its `basedOn`, the **default
+paragraph style** (`w:default="1"`, normally *Normal*) is applied to
+paragraphs without an explicit `pStyle`, and document default values
+(`docDefaults`) are honoured. This means a `Heading 1` size/spacing/bold
+defined only in `styles.xml` is also respected.
+
+### Pagination and layout engines
+
+A `.docx` **does not store fixed pages**: they are computed by the layout
+engine when rendering. `convert()` therefore selects an engine based on what
+is available (controllable via the `engine` parameter):
+
+| `engine`        | Pagination                                      | Requirements |
+|-----------------|-------------------------------------------------|--------------|
+| `auto` (def.)   | best available                                  | —            |
+| `word`          | **identical to Word** (same content per page)   | Word (Windows/macOS) |
+| `libreoffice`   | **faithful** to LibreOffice rendering           | LibreOffice (`soffice`) |
+| `weasyprint`    | approximate (built-in lxml + WeasyPrint flow)   | WeasyPrint   |
+
+In `auto` mode **Word → LibreOffice → WeasyPrint** is tried in order: if a
+real engine is found, the PDF has **the same content per page** as the
+document; otherwise (or if the real engine fails) the built-in flow is used
+(a warning is printed to *stderr*). LibreOffice uses its own engine (close to
+Word but not guaranteed identical). In all cases missing fonts are substituted,
+just as when opening the document on a machine without those fonts.
 
 ```python
 from docx2pdf_py import convert, default_engine
-convert("entrada.docx", "salida.pdf")                    # auto
-convert("entrada.docx", "salida.pdf", engine="libreoffice")
-print(default_engine())                                   # qué usaría 'auto' aquí
+convert("input.docx", "output.pdf")                    # auto
+convert("input.docx", "output.pdf", engine="libreoffice")
+print(default_engine())                                  # which engine 'auto' would pick here
 ```
 
 ```bash
-docx2pdf-py entrada.docx salida.pdf --engine libreoffice
-docx2pdf-py entrada.docx salida.pdf --fallback unavailable-only
+docx2pdf-py input.docx output.pdf --engine libreoffice
+docx2pdf-py input.docx output.pdf --fallback unavailable-only
 ```
 
-Se puede forzar la ruta de LibreOffice con la variable `SOFFICE_BIN`.
+The LibreOffice binary path can be overridden with the `SOFFICE_BIN`
+environment variable.
 
-**Flujo propio (WeasyPrint).** Cuando se usa el motor `weasyprint` la paginación
-es aproximada, pero se acerca lo posible a la de Word:
+**Built-in flow (WeasyPrint).** When the `weasyprint` engine is used,
+pagination is approximate but is brought as close as possible to Word's:
 
-- Los **saltos de sección** que inician página (`sectPr` con tipo ≠ `continuous`)
-  fuerzan un salto de página.
-- Se respetan las **pistas de paginación de Word** (`<w:lastRenderedPageBreak/>`),
-  que Word escribe donde partió la página la última vez que la renderizó. Es una
-  aproximación (puede quedar obsoleta si el documento se editó sin reabrirlo en
-  Word); se puede desactivar con la variable de entorno `RESPECT_PAGE_HINTS=0`.
+- **Section breaks** that start a new page (`sectPr` with type ≠ `continuous`)
+  force a page break.
+- **Word page hints** (`<w:lastRenderedPageBreak/>`) are respected — Word
+  writes these where it last broke the page. They can be stale if the document
+  was edited without reopening in Word; disable with `RESPECT_PAGE_HINTS=0`.
 
-## Limitaciones (conversor ligero, no un motor Word completo)
+## Limitations (a lightweight converter, not a full Word engine)
 
-- **Gráficos y objetos incrustados**: cuando no existe una previsualización de
-  imagen se conserva un marcador accesible, no el gráfico editable.
-- **Cambios controlados**: se muestra el texto insertado y se oculta el eliminado;
-  no se reproducen globos, autores ni fechas de revisión.
-- **Fuentes**: mapea Calibri→Carlito y Georgia→Gelasio (incl. las referidas por
-  tema vía `asciiTheme`); el resto usa la fuente real si está instalada y, si no,
-  cae en su familia genérica (serif/sans/monospace).
-- **Tamaño por defecto** 10 pt e **interlineado** ajustados a estilo "ofimático"
-  común (configurables vía variables de entorno `BODY_LH` / `CELL_LH`).
-- **Imágenes flotantes**: el ajuste se aproxima con `float` (posición exacta por
-  desplazamiento absoluto no se reproduce); "arriba y abajo"/"ninguno" caen a bloque.
-- Fidelidad **visual alta**, no *pixel-perfect* (eso exigiría la fuente real y el
-  motor de maquetación de Word).
+- **Charts and embedded objects**: when no image preview exists a placeholder
+  is kept in the output, not the editable chart.
+- **Tracked changes**: inserted text is shown and deleted text is hidden; review
+  balloons, authors, and dates are not reproduced.
+- **Fonts**: Calibri→Carlito and Georgia→Gelasio are mapped (including those
+  referenced by theme via `asciiTheme`); other fonts are used if installed and
+  fall back to their generic family (serif/sans/monospace) if not.
+- **Default size** 10 pt and **line-height** tuned to common office style
+  (configurable via `BODY_LH` / `CELL_LH` environment variables).
+- **Floating images**: wrapping is approximated with `float` (exact absolute
+  offset positioning is not reproduced); "top and bottom" / "none" fall back to
+  block layout.
+- Visual fidelity is **high**, not *pixel-perfect* (that would require the real
+  font and Word's layout engine).
 
-## Seguridad
+## Security
 
-Un `.docx` es entrada potencialmente no confiable. El parseo del OOXML usa un
-parser de `lxml` endurecido (sin resolución de entidades — evita XXE y *billion
-laughs* — ni acceso a red) y hay topes defensivos frente a *zip bombs*.
-También se limita el número de elementos XML y se normalizan los destinos de
-relaciones OOXML.
-Los motores generan primero un PDF temporal, validan su cabecera y solo entonces
-reemplazan la salida de forma atómica. Word, LibreOffice y WeasyPrint se ejecutan
-con límites de tiempo configurables.
+A `.docx` is potentially untrusted input. OOXML parsing uses a hardened `lxml`
+parser (no entity resolution — prevents XXE and *billion-laughs* attacks — and
+no network access) with defensive caps against *zip bombs*. XML element count
+is also limited and OOXML relationship targets are normalised. Engines first
+write a temporary PDF, validate its header, then atomically replace the output.
+Word, LibreOffice, and WeasyPrint are all run with configurable timeouts.
 
-## Desarrollo
+## Plugin engines
+
+Third-party packages can register custom engines via the
+`docx2pdf_py.engines` entry-point group:
+
+```toml
+# In your package's pyproject.toml:
+[project.entry-points."docx2pdf_py.engines"]
+my-engine = "my_package.engine:MyEngine"
+```
+
+`MyEngine` must satisfy the `ConversionEngine` protocol (a `name` attribute,
+`available() -> bool`, and `convert(in, out, options) -> str`). Registered
+engines are appended after the built-in ones during `auto` discovery.
+
+## Development
 
 ```bash
-pip install -e .[dev]   # instala también pytest y ruff
-pytest                  # los tests cubren build_html (OOXML -> HTML), sin WeasyPrint
-ruff check .            # linter (mismo chequeo que ejecuta CI)
-mypy docx2pdf_py         # tipos de la API y los backends
+pip install -e .[dev]   # also installs pytest and ruff
+pytest                  # tests cover build_html (OOXML -> HTML), no WeasyPrint needed
+ruff check .            # linter (same check that CI runs)
+mypy docx2pdf_py         # types for the API and backends
 python -m build          # sdist + wheel
 ```
 
-La CI ejecuta, además, un *smoke test* de extremo a extremo
-(`tests/e2e_smoke.py`) que convierte un `.docx` real a PDF con LibreOffice.
+CI also runs an end-to-end smoke test (`tests/e2e_smoke.py`) that converts a
+real `.docx` to PDF with LibreOffice.
 
-## Estructura
+## Structure
 
 ```
 docx2pdf_py/
-  __init__.py     → expone convert(), Converter, default_engine()
-  converter.py    → recorrido del documento OOXML y ensamblado HTML/CSS
-  api.py          → selección de motores, fallback, diagnósticos y lotes
-  backends.py     → adaptadores del protocolo de motores
-  engine_protocol.py → interfaz extensible para motores externos
-  ooxml.py        → lectura segura del paquete y utilidades OOXML
-  formatting.py   → numeración, fuentes, propiedades de texto y CSS
-  engines.py      → backends Word / LibreOffice y detección del motor
-  models.py       → opciones tipadas y resultado detallado
-  output.py       → validación y publicación atómica del PDF
-  exceptions.py   → jerarquía pública de errores
-  _*_worker.py    → procesos aislados y terminables para Word/WeasyPrint
-  processes.py    → ejecución y terminación del árbol de procesos
-  cli.py          → comando docx2pdf-py (incluye --engine)
-tests/            → suite de pytest (no requiere WeasyPrint) + e2e_smoke.py
-.github/workflows → CI (lint con ruff, pytest en varias versiones, e2e LibreOffice)
-pyproject.toml    → metadatos, dependencias y configuración de ruff
-main.py           → script de ejemplo (edita la ruta y ejecuta)
+  __init__.py        → exposes convert(), Converter, default_engine()
+  converter.py       → OOXML document traversal and HTML/CSS assembly
+  api.py             → engine selection, fallback, diagnostics, and batch
+  backends.py        → engine-protocol adapters + entry-point discovery
+  engine_protocol.py → extensible interface for external engines
+  ooxml.py           → secure package reading and OOXML utilities
+  formatting.py      → numbering, fonts, text properties, and CSS
+  engines.py         → Word / LibreOffice backends and engine detection
+  models.py          → typed options and detailed result objects
+  output.py          → PDF validation and atomic publishing
+  exceptions.py      → public error hierarchy
+  _*_worker.py       → isolated, terminable processes for Word/WeasyPrint
+  processes.py       → process-tree execution and termination
+  cli.py             → docx2pdf-py command (single file and batch)
+tests/               → pytest suite (no WeasyPrint required) + e2e scripts
+.github/workflows    → CI (ruff lint, pytest on multiple versions, e2e LibreOffice)
+pyproject.toml       → metadata, dependencies, and ruff/mypy configuration
+main.py              → example script (edit the path and run)
 ```
 
-## Licencia
+## License
 
-MIT — ver [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE).

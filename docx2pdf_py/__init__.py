@@ -1,15 +1,16 @@
-"""docx2pdf_py — conversión fiel de .docx a PDF usando solo librerías de Python.
+"""docx2pdf_py — faithful .docx to PDF conversion using pure Python libraries.
 
-Lee el OOXML del documento (estilos reales: fuentes, colores, bordes, sombreados,
-tablas, imágenes, cabecera/pie) y lo recrea como HTML que WeasyPrint pagina a PDF.
+Reads the OOXML from the document (real styles: fonts, colours, borders,
+shading, tables, images, headers/footers) and recreates it as HTML that
+WeasyPrint lays out and paginates into a PDF.
 
-Uso:
+Usage:
     from docx2pdf_py import convert
-    convert("entrada.docx", "salida.pdf")
+    convert("input.docx", "output.pdf")
 """
 from importlib.metadata import PackageNotFoundError, version
 
-from .api import convert, convert_batch, convert_detailed
+from .api import convert, convert_batch, convert_batch_async, convert_detailed
 from .converter import Converter
 from .engine_protocol import ConversionEngine
 from .engines import default_engine, find_libreoffice, word_available
@@ -32,7 +33,8 @@ try:
 except PackageNotFoundError:
     __version__ = "0+unknown"
 __all__ = [
-    "convert", "convert_detailed", "convert_batch", "Converter", "ConversionOptions",
+    "convert", "convert_detailed", "convert_batch", "convert_batch_async",
+    "Converter", "ConversionOptions",
     "ConversionResult", "ConversionAttempt", "BatchItemResult", "ConversionEngine",
     "Docx2PdfError", "InvalidDocumentError", "EngineUnavailableError",
     "ConversionError", "ConversionTimeoutError", "__version__",

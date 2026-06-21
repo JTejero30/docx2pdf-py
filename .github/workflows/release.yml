@@ -8,7 +8,12 @@ permissions:
   contents: read
 
 jobs:
+  # Gate: run the full CI suite on the tagged commit before publishing.
+  ci:
+    uses: ./.github/workflows/ci.yml
+
   publish:
+    needs: [ci]
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

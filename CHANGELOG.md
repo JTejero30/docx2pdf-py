@@ -1,55 +1,80 @@
 # Changelog
 
-Todas las novedades destacables de este proyecto se documentan aquí.
-El formato sigue, a grandes rasgos, [Keep a Changelog](https://keepachangelog.com/).
+All notable changes to this project are documented here.
+The format follows, loosely, [Keep a Changelog](https://keepachangelog.com/).
 
-## [Sin publicar]
+## [0.2.0] — Unreleased
 
-### Añadido
-- Protocolo extensible de motores, políticas explícitas de fallback y API de
-  conversión por lotes con concurrencia acotada, cancelación y nombres seguros.
-- Diagnósticos por conversión: intentos, errores, tiempos, tamaños y páginas.
-- Soporte del flujo propio para overrides de numeración, notas al pie/finales,
-  revisiones, cuadros de texto, ecuaciones, columnas y secciones con geometría
-  propia, cabeceras de tabla repetibles y filas no divisibles.
-- Corpus E2E generado con texto esperado por página y comprobación raster.
-- Límites de elementos XML, validación estructural de PDF y terminación de
-  árboles de procesos.
-- API `convert_detailed()` con el motor realmente usado, avisos de fallback y
-  opciones tipadas por conversión mediante `ConversionOptions`.
-- Jerarquía pública de excepciones para documentos inválidos, motores no
-  disponibles, errores de conversión y timeouts.
-- Publicación atómica y validación de PDFs para todos los motores.
-- Procesos terminables para WeasyPrint y la automatización de Word en Windows.
-- Tests de CLI, empaquetado, timeouts, fallback y preservación de salidas.
-- Automatización de dependencias, validación de wheel y publicación a PyPI con
-  identidad federada en CI.
-- **Resaltado de texto** (`w:highlight`): se reproduce con `background-color`,
-  mapeando los colores con nombre de Word (yellow, green, cyan…).
-- **Mayúsculas y versalitas** (`w:caps` / `w:smallCaps`) → `text-transform` /
-  `font-variant`.
-- **Glifos de viñeta**: las listas con viñeta usan el carácter del nivel
-  (`lvlText`) mapeado a su equivalente Unicode (Wingdings/Symbol → `•`, `▪`, `✓`…)
-  en lugar de un guion fijo.
-- **Estilo de párrafo por defecto**: los párrafos sin `pStyle` explícito heredan
-  el estilo marcado `w:default="1"` (normalmente *Normal*), como hace Word.
-- **Metadatos del PDF**: título, autor, asunto y palabras clave se leen de
-  `docProps/core.xml` y se trasladan a los metadatos del PDF.
-- **Validación de entrada** en `convert()`: error claro si el archivo no existe
-  o no es un ZIP/OOXML válido.
-- **Marcador de tipos** `py.typed` para consumidores con *type checkers*.
-- **CI**: trabajo de *lint* con ruff y *smoke test* de extremo a extremo
-  (`tests/e2e_smoke.py`) que convierte un `.docx` real a PDF con LibreOffice.
+### Added
+- **Batch CLI**: `docx2pdf-py file1.docx file2.docx --output-dir pdfs/` converts
+  multiple files in one command, exposing the existing `convert_batch` API from
+  the CLI.
+- **`convert_batch` progress callback**: optional `on_progress` parameter calls a
+  `Callable[[BatchItemResult], None]` after each item completes, enabling
+  real-time logging and progress bars.
+- **`convert_batch_async`**: async wrapper around `convert_batch` that runs the
+  thread pool via `asyncio.get_event_loop().run_in_executor`, suitable for use
+  in FastAPI and other async frameworks.
+- **`BatchItemResult.succeeded` / `.failed` properties**: convenience shorthands
+  replacing the verbose `result is not None and not cancelled` pattern.
+- **Entry-point engine discovery**: third-party packages can now register engines
+  via the `docx2pdf_py.engines` entry-point group; they are appended after the
+  built-ins during `auto` discovery.
+- **Plugin documentation**: README explains the entry-point protocol and the
+  `ConversionEngine` interface required.
+- **English documentation**: README, CHANGELOG, and module docstrings translated
+  to English for broader PyPI audience.
+- **Python 3.10 in CI matrix**: closes the gap between 3.9 and 3.11.
+- **Release workflow depends on CI**: `release.yml` now requires `lint` and
+  `test` to pass before publishing, preventing broken tags from reaching PyPI.
 
-### Cambiado
-- El renderizado WeasyPrint extrae imágenes a recursos temporales locales para
-  evitar inflar el HTML y duplicar memoria mediante base64.
-- El conversor monolítico se divide en módulos de API, backends, OOXML,
-  formato, procesos y publicación de salida.
-- `pyproject.toml`: configuración de ruff y `ruff` añadido a las dependencias de
-  desarrollo; metadatos de autoría corregidos.
+### Changed
+- `weasyprint` dependency upper bound relaxed from `<72` to `<80` to avoid
+  unnecessary breakage when new WeasyPrint releases ship.
+- `pyproject.toml` version bumped to `0.2.0`.
+- Coverage minimum target raised from 80 % to 85 %.
 
 ## [0.1.0]
 
-- Versión inicial: conversión `.docx` → PDF solo con Python (lxml + WeasyPrint),
-  con dispatch opcional a Word/LibreOffice para paginación fiel.
+### Added
+- Extensible engine protocol, explicit fallback policies, and a batch
+  conversion API with bounded concurrency, cancellation, and collision-safe
+  output names.
+- Per-conversion diagnostics: attempts, errors, timings, sizes, and page count.
+- Built-in flow support for numbering overrides, footnotes/endnotes, tracked
+  changes, text boxes, equations, multi-column layouts, per-section geometry,
+  repeatable table headers, and indivisible rows.
+- End-to-end corpus with expected per-page text and raster check.
+- XML element limits, PDF structural validation, and process-tree termination.
+- `convert_detailed()` API with the engine actually used, fallback warnings,
+  and typed per-conversion options via `ConversionOptions`.
+- Public exception hierarchy for invalid documents, unavailable engines,
+  conversion errors, and timeouts.
+- Atomic output publishing and PDF validation for all engines.
+- Terminable processes for WeasyPrint and Word automation on Windows.
+- CLI, packaging, timeout, fallback, and output-preservation tests.
+- Dependency automation, wheel validation, and PyPI publishing with federated
+  identity in CI.
+- **Text highlighting** (`w:highlight`): reproduced with `background-color`,
+  mapping Word's named colours (yellow, green, cyan…).
+- **Caps / small-caps** (`w:caps` / `w:smallCaps`) → `text-transform` /
+  `font-variant`.
+- **Bullet glyphs**: bulleted lists use the level character from `lvlText`
+  mapped to its Unicode equivalent (Wingdings/Symbol → `•`, `▪`, `✓`…)
+  instead of a hard-coded dash.
+- **Default paragraph style**: paragraphs without an explicit `pStyle` inherit
+  the style marked `w:default="1"` (normally *Normal*), as Word does.
+- **PDF metadata**: title, author, subject, and keywords are read from
+  `docProps/core.xml` and transferred to the PDF.
+- **Input validation** in `convert()`: clear error if the file does not exist
+  or is not a valid ZIP/OOXML document.
+- **`py.typed` marker** for type-checker consumers.
+- **CI**: `lint` job with ruff and an end-to-end smoke test (`tests/e2e_smoke.py`)
+  that converts a real `.docx` to PDF with LibreOffice.
+
+### Changed
+- WeasyPrint rendering extracts images to local temporary resources to avoid
+  inflating HTML and duplicating memory via base64.
+- Monolithic converter split into api, backends, ooxml, formatting, processes,
+  and output modules.
+- `pyproject.toml`: ruff configuration added; authorship metadata corrected.

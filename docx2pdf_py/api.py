@@ -5,13 +5,13 @@ from __future__ import annotations
 import os
 import time
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Event
 from typing import cast
 
-from .backends import BUILTIN_ENGINES
+from .backends import load_engine_registry
 from .engine_protocol import ConversionEngine
 from .exceptions import EngineUnavailableError, InvalidDocumentError
 from .models import (
@@ -66,7 +66,7 @@ def convert_detailed(
     """Convert a document and return backend attempts and output diagnostics."""
     started = time.perf_counter()
     options = options or ConversionOptions.from_environment()
-    registry = tuple(BUILTIN_ENGINES if engine_registry is None else engine_registry)
+    registry = tuple(load_engine_registry() if engine_registry is None else engine_registry)
     by_name = {backend.name.lower(): backend for backend in registry}
     requested = (engine or "auto").lower()
     key = _ENGINE_ALIASES.get(requested, requested)
@@ -158,6 +158,7 @@ def convert_batch(
     *,
     max_workers: int = 4,
     cancel_event: Event | None = None,
+    on_progress: Callable[[BatchItemResult], None] | None = None,
 ) -> tuple[BatchItemResult, ...]:
     """Convert multiple documents concurrently with stable, collision-safe names."""
     if max_workers < 1:
@@ -183,12 +184,16 @@ def convert_batch(
     def run(job: tuple[Pathish, Path]) -> BatchItemResult:
         source, target = job
         if cancel_event.is_set():
-            return BatchItemResult(str(source), str(target), cancelled=True)
-        try:
-            result = convert_detailed(source, target, engine=engine, options=options)
-            return BatchItemResult(str(source), str(target), result=result)
-        except Exception as exc:  # noqa: BLE001 - batch results isolate per-file failures
-            return BatchItemResult(str(source), str(target), error=str(exc))
+            item = BatchItemResult(str(source), str(target), cancelled=True)
+        else:
+            try:
+                result = convert_detailed(source, target, engine=engine, options=options)
+                item = BatchItemResult(str(source), str(target), result=result)
+            except Exception as exc:  # noqa: BLE001 - batch results isolate per-file failures
+                item = BatchItemResult(str(source), str(target), error=str(exc))
+        if on_progress is not None:
+            on_progress(item)
+        return item
 
     results: list[BatchItemResult | None] = [None] * len(jobs)
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -206,3 +211,37 @@ def convert_batch(
                 for pending in futures:
                     pending.cancel()
     return tuple(cast(BatchItemResult, result) for result in results)
+
+
+async def convert_batch_async(
+    inputs: Sequence[Pathish],
+    output_directory: Pathish,
+    engine: str = "auto",
+    options: ConversionOptions | None = None,
+    *,
+    max_workers: int = 4,
+    cancel_event: Event | None = None,
+    on_progress: Callable[[BatchItemResult], None] | None = None,
+) -> tuple[BatchItemResult, ...]:
+    """Async wrapper around :func:`convert_batch` for use in async frameworks.
+
+    Runs the thread pool in the default executor so the event loop is not
+    blocked.  All parameters are forwarded unchanged to :func:`convert_batch`.
+    """
+    import asyncio
+    import functools
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None,
+        functools.partial(
+            convert_batch,
+            inputs,
+            output_directory,
+            engine,
+            options,
+            max_workers=max_workers,
+            cancel_event=cancel_event,
+            on_progress=on_progress,
+        ),
+    )

@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
+from importlib.metadata import entry_points
 from typing import cast
 
 from . import engines
 from .engine_protocol import ConversionEngine
 from .models import ConversionOptions, ResolvedEngine
 from .output import Pathish
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -62,3 +66,24 @@ BUILTIN_ENGINES: tuple[ConversionEngine, ...] = (
     cast(ConversionEngine, LibreOfficeEngine()),
     cast(ConversionEngine, WeasyPrintEngine()),
 )
+
+_BUILTIN_NAMES = frozenset(e.name for e in BUILTIN_ENGINES)
+
+
+def load_engine_registry() -> tuple[ConversionEngine, ...]:
+    """Return built-in engines plus any discovered via the entry-point group.
+
+    Third-party packages register engines under ``docx2pdf_py.engines``.  Only
+    engines whose ``name`` differs from the built-ins are appended, so
+    re-registering a built-in has no effect.
+    """
+    extra: list[ConversionEngine] = []
+    for ep in entry_points(group="docx2pdf_py.engines"):
+        if ep.name in _BUILTIN_NAMES:
+            continue
+        try:
+            engine_cls = ep.load()
+            extra.append(cast(ConversionEngine, engine_cls()))
+        except Exception:
+            _log.warning("Failed to load engine from entry point %r", ep.name, exc_info=True)
+    return BUILTIN_ENGINES + tuple(extra)

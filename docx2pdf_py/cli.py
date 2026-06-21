@@ -1,4 +1,4 @@
-"""Command-line interface: docx2pdf-py input.docx [output.pdf]"""
+"""Command-line interface: docx2pdf-py [inputs...] [output] [--output-dir DIR]"""
 from __future__ import annotations
 
 import argparse
@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from dataclasses import replace
 
 from . import __version__
-from .converter import convert_detailed
+from .api import convert_batch, convert_detailed
 from .exceptions import Docx2PdfError
 from .models import ConversionOptions
 
@@ -17,23 +17,31 @@ from .models import ConversionOptions
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="docx2pdf-py",
-        description="Convert a .docx file to PDF using pure Python libraries.",
+        description=(
+            "Convert .docx files to PDF using pure Python libraries.\n\n"
+            "Single-file:  docx2pdf-py input.docx [output.pdf]\n"
+            "Batch:        docx2pdf-py file1.docx file2.docx --output-dir pdfs/"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "input",
-        nargs="?",
-        help="path to the .docx file (default: first .docx found in the current directory)",
+        "inputs",
+        nargs="*",
+        help=(
+            "path(s) to .docx file(s). "
+            "Single-file mode: first arg is input, optional second arg is output path. "
+            "Batch mode (--output-dir): all args are input files."
+        ),
     )
     parser.add_argument(
-        "output",
-        nargs="?",
-        default="output.pdf",
-        help="path for the output PDF (default: output.pdf)",
+        "--output-dir",
+        metavar="DIR",
+        help="batch mode: write all converted PDFs into this directory",
     )
     parser.add_argument(
         "-f", "--force",
         action="store_true",
-        help="overwrite the output file if it already exists",
+        help="overwrite the output file if it already exists (single-file mode only)",
     )
     parser.add_argument(
         "-e", "--engine",
@@ -44,6 +52,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             "'word' and 'libreoffice' produce faithful pagination; "
             "'weasyprint' uses the built-in Python flow (approximate)."
         ),
+    )
+    parser.add_argument(
+        "-j", "--workers",
+        type=int,
+        default=4,
+        metavar="N",
+        help="maximum parallel workers for batch mode (default: 4)",
     )
     parser.add_argument(
         "-q", "--quiet",
@@ -63,37 +78,95 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
-    src = args.input
-    if src is None:
+    options = ConversionOptions.from_environment()
+    if args.fallback:
+        options = replace(options, fallback=args.fallback)
+
+    # ── Batch mode ────────────────────────────────────────────────────────────
+    if args.output_dir is not None:
+        srcs = list(args.inputs)
+        if not srcs:
+            srcs = sorted(glob.glob("*.docx"))
+            if not srcs:
+                parser.error("no input files given and no .docx found in the current directory")
+            if not args.quiet:
+                print(
+                    f"[docx2pdf-py] auto-discovered {len(srcs)} file(s)",
+                    file=sys.stderr,
+                )
+        for src in srcs:
+            if not os.path.exists(src):
+                parser.error(f"file not found: {src}")
+
+        def _progress(item) -> None:  # type: ignore[no-untyped-def]
+            if args.quiet:
+                return
+            if item.succeeded:
+                extra = ""
+                if args.verbose and item.result:
+                    r = item.result
+                    extra = (
+                        f"  [engine: {r.engine} | "
+                        f"{r.elapsed_seconds:.3f}s | "
+                        f"pages: {r.page_count or '?'}]"
+                    )
+                print(f"OK  {item.input_path} -> {item.output_path}{extra}")
+            elif item.cancelled:
+                print(f"--  {item.input_path} (cancelled)", file=sys.stderr)
+            else:
+                print(f"ERR {item.input_path}: {item.error}", file=sys.stderr)
+
+        results = convert_batch(
+            srcs,
+            args.output_dir,
+            engine=args.engine,
+            options=options,
+            max_workers=args.workers,
+            on_progress=_progress,
+        )
+        failures = [r for r in results if r.failed]
+        return 1 if failures else 0
+
+    # ── Single-file mode ──────────────────────────────────────────────────────
+    inputs = args.inputs
+    if len(inputs) == 0:
         cands = sorted(glob.glob("*.docx"))
         if not cands:
             parser.error("no input file given and no .docx found in the current directory")
         src = cands[0]
+        out = "output.pdf"
         if not args.quiet:
             print(f"[docx2pdf-py] auto-selected input: {src}", file=sys.stderr)
+    elif len(inputs) == 1:
+        src = inputs[0]
+        out = "output.pdf"
+    elif len(inputs) == 2:
+        src, out = inputs[0], inputs[1]
+    else:
+        parser.error(
+            "too many positional arguments for single-file mode; "
+            "use --output-dir for batch conversion"
+        )
 
     if not os.path.exists(src):
         parser.error(f"file not found: {src}")
-    if os.path.exists(args.output) and not args.force:
-        parser.error(f"output already exists: {args.output} (use -f to overwrite)")
+    if os.path.exists(out) and not args.force:
+        parser.error(f"output already exists: {out} (use -f to overwrite)")
 
     if args.verbose and not args.quiet:
         print(f"Input:  {src}")
-        print(f"Output: {args.output}")
+        print(f"Output: {out}")
         print(f"Requested engine: {args.engine}")
 
     try:
-        options = ConversionOptions.from_environment()
-        if args.fallback:
-            options = replace(options, fallback=args.fallback)
-        result = convert_detailed(src, args.output, engine=args.engine, options=options)
+        result = convert_detailed(src, out, engine=args.engine, options=options)
     except (Docx2PdfError, OSError) as exc:
         parser.error(str(exc))
 
     if not args.quiet:
         for warning in result.warnings:
             print(f"[docx2pdf-py] {warning}", file=sys.stderr)
-        print(f"OK {src} -> {args.output}  [engine: {result.engine}]")
+        print(f"OK {src} -> {out}  [engine: {result.engine}]")
         if args.verbose:
             print(
                 f"Elapsed: {result.elapsed_seconds:.3f}s | "

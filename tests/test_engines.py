@@ -150,3 +150,46 @@ def test_convert_libreoffice_no_binary(monkeypatch):
     monkeypatch.setattr(E, "find_libreoffice", lambda: None)
     with pytest.raises(RuntimeError, match="not available"):
         E.convert_libreoffice("in.docx", "out.pdf", soffice=None)
+
+
+# -- entry-point engine discovery -------------------------------------------
+def test_load_engine_registry_includes_builtins():
+    from docx2pdf_py.backends import BUILTIN_ENGINES, load_engine_registry
+
+    registry = load_engine_registry()
+    builtin_names = {e.name for e in BUILTIN_ENGINES}
+    registry_names = {e.name for e in registry}
+    assert builtin_names <= registry_names
+
+
+def test_load_engine_registry_skips_builtin_entry_points(monkeypatch):
+    """Re-registering a built-in engine name via entry point must be a no-op."""
+    import docx2pdf_py.backends as B
+
+    class _FakeEP:
+        name = "weasyprint"
+
+        def load(self):
+            raise AssertionError("should not be loaded")
+
+    monkeypatch.setattr(B, "entry_points", lambda group: [_FakeEP()])
+    registry = B.load_engine_registry()
+    assert len(registry) == len(B.BUILTIN_ENGINES)
+
+
+def test_load_engine_registry_logs_broken_entry_point(monkeypatch, caplog):
+    import logging
+
+    import docx2pdf_py.backends as B
+
+    class _BadEP:
+        name = "broken-engine"
+
+        def load(self):
+            raise ImportError("missing dep")
+
+    monkeypatch.setattr(B, "entry_points", lambda group: [_BadEP()])
+    with caplog.at_level(logging.WARNING, logger="docx2pdf_py.backends"):
+        registry = B.load_engine_registry()
+    assert len(registry) == len(B.BUILTIN_ENGINES)
+    assert any("broken-engine" in r.message for r in caplog.records)
