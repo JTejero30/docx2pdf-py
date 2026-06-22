@@ -1,0 +1,91 @@
+{
+  "info": {
+    "name": "docx2pdf-py API",
+    "description": "Conversión .docx -> PDF en red local. Cambia {{base_url}} si la IP del servidor es distinta. El parámetro ?engine= elige el motor: weasyprint (Python puro, aprox.), libreoffice (páginas exactas como Word), word (solo si hay MS Word), auto.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://192.168.0.23:8000", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": ["{{base_url}}"],
+          "path": ["health"]
+        },
+        "description": "Comprueba que el servidor está vivo e indica el motor por defecto."
+      }
+    },
+    {
+      "name": "Convert - weasyprint (Python puro)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "file", "type": "file", "src": [], "description": "Selecciona el .docx a convertir" }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/convert?engine=weasyprint",
+          "host": ["{{base_url}}"],
+          "path": ["convert"],
+          "query": [
+            { "key": "engine", "value": "weasyprint", "description": "Python puro; paginación aproximada" }
+          ]
+        },
+        "description": "Sube un .docx (Body > form-data > key 'file' tipo File) y usa 'Send and Download' para guardar el PDF. Motor Python puro."
+      }
+    },
+    {
+      "name": "Convert - libreoffice (páginas exactas)",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "file", "type": "file", "src": [], "description": "Selecciona el .docx a convertir" }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/convert?engine=libreoffice",
+          "host": ["{{base_url}}"],
+          "path": ["convert"],
+          "query": [
+            { "key": "engine", "value": "libreoffice", "description": "Paginación idéntica a Word (usa LibreOffice)" }
+          ]
+        },
+        "description": "Igual que el anterior pero con motor LibreOffice: mismo nº de páginas y contenido por página que Word. Respuesta con cabeceras X-Engine y X-Page-Count."
+      }
+    },
+    {
+      "name": "Convert - auto",
+      "request": {
+        "method": "POST",
+        "header": [],
+        "body": {
+          "mode": "formdata",
+          "formdata": [
+            { "key": "file", "type": "file", "src": [], "description": "Selecciona el .docx a convertir" }
+          ]
+        },
+        "url": {
+          "raw": "{{base_url}}/convert?engine=auto",
+          "host": ["{{base_url}}"],
+          "path": ["convert"],
+          "query": [
+            { "key": "engine", "value": "auto", "description": "Word -> LibreOffice -> weasyprint según disponibilidad" }
+          ]
+        },
+        "description": "Deja que el servidor elija el mejor motor disponible (en esta máquina: LibreOffice)."
+      }
+    }
+  ]
+}

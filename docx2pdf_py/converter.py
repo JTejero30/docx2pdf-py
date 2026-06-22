@@ -107,17 +107,24 @@ class Converter(OOXMLPackage):
         self._pending_floats: list[str] = []
         self._list_counters: dict[str, Any] = {}  # numId -> {ilvl: current count}
         self._content_started = False
+        # relaciones activas al resolver imágenes/enlaces: por defecto las del
+        # documento, pero al pintar una cabecera/pie se cambian a las SUYAS
+        # (cada parte tiene su .rels y sus rId son locales -> evita colisiones).
+        self._cur_rels = self.rels
 
-        # cabecera/pie por tipo (default / first / even) según el sectPr
+        # cabecera/pie por tipo (default / first / even) según el sectPr.
+        # Cada entrada es (root_xml, rels_de_esa_parte).
         sect = self.doc.find(w("body")).find(w("sectPr"))
         self.headers = {t: self._ref_part(sect, "headerReference", t)
                         for t in ("default", "first", "even")}
         self.footers = {t: self._ref_part(sect, "footerReference", t)
                         for t in ("default", "first", "even")}
-        if self.headers["default"] is None:
-            self.headers["default"] = self._opt("word/header1.xml")
-        if self.footers["default"] is None:
-            self.footers["default"] = self._opt("word/footer1.xml")
+        if self.headers["default"][0] is None:
+            self.headers["default"] = (self._opt("word/header1.xml"),
+                                       self._part_rels("word/header1.xml"))
+        if self.footers["default"][0] is None:
+            self.footers["default"] = (self._opt("word/footer1.xml"),
+                                       self._part_rels("word/footer1.xml"))
 
         # primera página distinta (<w:titlePg/>) y pares/impares distintos
         self.title_pg = bool(on(first(sect, "titlePg"))) if sect is not None else False
@@ -144,16 +151,34 @@ class Converter(OOXMLPackage):
         return {r.get("Id"): r.get("Target") for r in root}
 
     def _ref_part(self, sect: Any, tag: str, type_: str = "default") -> Any:
-        """Carga la parte (header/footer) referenciada con el type dado."""
+        """Carga la parte (header/footer) del type dado como (root, sus_rels)."""
         if sect is None:
-            return None
+            return (None, {})
         for ref in sect.findall(w(tag)):
             if ref.get(w("type")) == type_:
                 rid = ref.get(f"{{{R}}}id")
                 target = self.rels.get(rid)
                 if target:
-                    return self._opt(self._resolve_part("word", target))
-        return None
+                    part = self._resolve_part("word", target)
+                    return (self._opt(part), self._part_rels(part))
+        return (None, {})
+
+    def _part_rels(self, part_path: str) -> dict[str, str]:
+        """Relaciones propias de una parte (p.ej. word/footer2.xml -> sus rId).
+
+        Imprescindible para cabeceras/pies: sus rId (imágenes, enlaces) son
+        locales a su .rels y NO coinciden con los del documento.
+        """
+        if "/" in part_path:
+            folder, name = part_path.rsplit("/", 1)
+            rels_path = f"{folder}/_rels/{name}.rels"
+        else:
+            rels_path = f"_rels/{part_path}.rels"
+        try:
+            root = self._xml_part(rels_path)
+        except KeyError:
+            return {}
+        return {r.get("Id"): r.get("Target") for r in root}
 
     # -- tema / valores por defecto / herencia de estilos -----------------
     def _index_theme(self) -> dict[str, Any]:
@@ -390,7 +415,7 @@ class Converter(OOXMLPackage):
             elif tag == "hyperlink":
                 inner = self.render_runs(child, base)
                 rid = child.get(f"{{{R}}}id")
-                href = self.rels.get(rid) if rid else None
+                href = self._cur_rels.get(rid) if rid else None
                 if href:
                     parts.append(
                         f'<a href="{esc(href)}" '
@@ -495,7 +520,7 @@ class Converter(OOXMLPackage):
         blip = drawing.find(".//" + f"{{{A}}}blip")
         if blip is None:
             return ""
-        target = self.rels.get(blip.get(f"{{{R}}}embed"))
+        target = self._cur_rels.get(blip.get(f"{{{R}}}embed"))
         if not target:
             return ""
         ext = drawing.find(".//" + f"{{{WP}}}extent")  # tamaño en EMU -> pt
@@ -904,8 +929,14 @@ class Converter(OOXMLPackage):
         # running element con nombre propio y se asocia a su regla @page.
         divs = []
 
-        def emit(root: Any, is_footer: bool, name: str) -> Optional[str]:
-            html = self._hf_div(root, content_cm, is_footer, name)
+        def emit(item: Any, is_footer: bool, name: str) -> Optional[str]:
+            root, rels = item
+            prev = self._cur_rels
+            self._cur_rels = rels or self.rels  # rels propias de la cabecera/pie
+            try:
+                html = self._hf_div(root, content_cm, is_footer, name)
+            finally:
+                self._cur_rels = prev
             if html:
                 divs.append(html)
                 return name
