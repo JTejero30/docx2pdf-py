@@ -401,11 +401,13 @@ class Converter(OOXMLPackage):
     def render_runs(self, p: Any, base: dict[str, Any]) -> str:
         """HTML de los runs de un párrafo, heredando 'base' (rPr de su estilo).
 
-        Ignora los campos (fldChar/instrText) y su valor cacheado: p.ej. el
-        campo PAGE del pie guarda un número que no debe imprimirse tal cual.
+        Maneja campos de Word: el código del campo nunca se imprime, pero SÍ su
+        resultado (entradas de índice TOC, PAGEREF…). Los campos PAGE/NUMPAGES se
+        sustituyen por contadores en vivo, para que el número de página case con
+        la paginación real del PDF (no el valor cacheado).
         """
         parts = []
-        in_field = False
+        field_stack: list[dict[str, Any]] = []
         for child in p:
             tag = etree.QName(child).localname
             if tag in ("ins", "moveTo", "smartTag", "sdt"):
@@ -426,14 +428,32 @@ class Converter(OOXMLPackage):
                         f'<a style="color:inherit;text-decoration:underline">{inner}</a>'
                     )
             elif tag == "r":
-                types = [fc.get(w("fldCharType")) for fc in child.findall(w("fldChar"))]
-                if "begin" in types:
-                    in_field = True
-                skip = in_field or child.find(w("instrText")) is not None
-                if "end" in types:
-                    in_field = False
-                if not skip:
-                    parts.append(self._render_run(child, base))
+                for fc in child.findall(w("fldChar")):
+                    t = fc.get(w("fldCharType"))
+                    if t == "begin":
+                        field_stack.append({"instr": "", "phase": "code", "skip": False})
+                    elif t == "separate" and field_stack:
+                        f = field_stack[-1]
+                        f["phase"] = "result"
+                        up = f["instr"].upper()
+                        if "NUMPAGES" in up:  # nº total de páginas -> contador
+                            parts.append('<span class="pagecount"></span>')
+                            f["skip"] = True
+                        elif re.search(r"\bPAGE\b", up):  # nº de página -> contador
+                            parts.append('<span class="pageno"></span>')
+                            f["skip"] = True
+                    elif t == "end" and field_stack:
+                        field_stack.pop()
+                instr = child.find(w("instrText"))
+                if instr is not None:  # el código del campo no se imprime
+                    if field_stack:
+                        field_stack[-1]["instr"] += (instr.text or "")
+                    continue
+                if field_stack:
+                    f = field_stack[-1]
+                    if f["phase"] == "code" or f["skip"]:
+                        continue  # zona de código o resultado sustituido por contador
+                parts.append(self._render_run(child, base))
             elif tag in ("oMath", "oMathPara"):
                 equation = "".join(child.itertext()).strip()
                 if equation:
@@ -591,7 +611,9 @@ class Converter(OOXMLPackage):
         if "after" in layout:
             css.append(f"margin-bottom:{tw_pt(layout['after']):.1f}pt")
         if "line" in layout:
-            css.append(f"line-height:{float(layout['line'])/240.0:.2f}")
+            css.append(
+                f"line-height:{float(layout['line'])/240.0*self.options.line_height_factor:.3f}"
+            )
         if layout.get("left"):
             css.append(f"margin-left:{tw_pt(layout['left']):.1f}pt")
         if layout.get("right"):
@@ -816,33 +838,40 @@ class Converter(OOXMLPackage):
 
     # -- cabecera / pie ----------------------------------------------------
     def _hf_div(self, root: Any, width_cm: float, is_footer: bool, name: str) -> str:
-        """Renderiza una cabecera/pie como elemento ``running(name)``."""
+        """Renderiza una cabecera/pie COMPLETA (todos sus párrafos y tablas)
+        como elemento ``running(name)``. Los campos PAGE/NUMPAGES se convierten
+        en contadores en vivo dentro de render_runs, en su posición real."""
         if root is None:
             return ""
-        p = root.find(w("p"))
-        if p is None:
+        # aislar las imágenes flotantes para que no se filtren al cuerpo
+        saved_floats = self._pending_floats
+        self._pending_floats = []
+        blocks = []
+        for child in root:
+            t = etree.QName(child).localname
+            if t == "p":
+                blocks.append(self.render_paragraph(child))
+            elif t == "tbl":
+                blocks.append(self.render_table(child))
+            elif t == "sdt":
+                content = first(child, "sdtContent")
+                for c in (content if content is not None else []):
+                    ct = etree.QName(c).localname
+                    if ct == "p":
+                        blocks.append(self.render_paragraph(c))
+                    elif ct == "tbl":
+                        blocks.append(self.render_table(c))
+            if self._pending_floats:
+                blocks.extend(self._pending_floats)
+                self._pending_floats = []
+        self._pending_floats = saved_floats
+        if not blocks:
             return ""
-        ppr = first(p, "pPr")
-        border = ""
-        if ppr is not None:
-            pbdr = first(ppr, "pBdr")
-            if pbdr is not None:
-                side = "top" if is_footer else "bottom"
-                bc = border_css(first(pbdr, side))
-                if bc and bc != "none":
-                    border = f"border-{side}:{bc};padding-{side}:3pt;"
-        base = dict(self.default)
-        inner = self.render_runs(p, base)
-        pagenum = ""
-        if is_footer:
-            # campo PAGE -> contador de página alineado a la derecha
-            inner = re.sub(r" {2,}", " ", inner)
-            pagenum = '<span class="pageno" style="float:right"></span>'
         style = (
-            f"position:running({name});width:{width_cm:.2f}cm;{border}"
+            f"position:running({name});width:{width_cm:.2f}cm;"
             f"font-family:{font_stack('Calibri')};color:#4a4a4a;"
         )
-        return f'<div id="{name}" style="{style}">{pagenum}{inner}</div>'
+        return f'<div id="{name}" style="{style}">{"".join(blocks)}</div>'
 
     @staticmethod
     def _slot(elem_name: Optional[str], where: str) -> str:
@@ -1010,6 +1039,7 @@ class Converter(OOXMLPackage):
         .textbox {{ display: inline-block; border: 0.5pt solid #999; padding: 2pt; }}
         .equation {{ font-family: serif; font-style: italic; }}
         .pageno::after {{ content: counter(page); }}
+        .pagecount::after {{ content: counter(pages); }}
         """
         # Metadatos del documento -> <title>/<meta> que WeasyPrint vuelca al PDF.
         meta = self._doc_metadata()

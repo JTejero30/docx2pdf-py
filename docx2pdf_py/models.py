@@ -41,6 +41,10 @@ class ConversionOptions:
     native_engine_timeout: int = 120
     body_line_height: float = 1.0
     cell_line_height: float = 1.16
+    # El interlineado "sencillo" de Word (line=240, auto) incluye el line-gap de
+    # la fuente; en CSS line-height:1.0 queda más apretado. Este factor lo
+    # aproxima (afecta a la altura de línea y a la paginación).
+    line_height_factor: float = 1.15
     respect_page_hints: bool = True
     fallback: FallbackPolicy = "always"
 
@@ -48,7 +52,7 @@ class ConversionOptions:
         for name in ("weasyprint_timeout", "native_engine_timeout"):
             if getattr(self, name) < 0:
                 raise ValueError(f"{name} must be zero or greater")
-        for name in ("body_line_height", "cell_line_height"):
+        for name in ("body_line_height", "cell_line_height", "line_height_factor"):
             value = getattr(self, name)
             if not math.isfinite(value) or value <= 0 or value > 10:
                 raise ValueError(f"{name} must be a finite value between 0 and 10")
@@ -63,6 +67,7 @@ class ConversionOptions:
             native_engine_timeout=_env_int("NATIVE_ENGINE_TIMEOUT", 120),
             body_line_height=_env_float("BODY_LH", 1.0),
             cell_line_height=_env_float("CELL_LH", 1.16),
+            line_height_factor=_env_float("LINE_FACTOR", 1.15),
             respect_page_hints=_env_bool("RESPECT_PAGE_HINTS", True),
             fallback=os.environ.get("DOCX2PDF_FALLBACK", "always"),  # type: ignore[arg-type]
         )
