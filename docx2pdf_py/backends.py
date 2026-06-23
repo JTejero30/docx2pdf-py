@@ -62,9 +62,11 @@ class WeasyPrintEngine:
         return _convert_weasyprint(input_path, output_path, options=options)
 
 
+# Orden de preferencia de 'auto': LibreOffice -> Word -> WeasyPrint (Python puro).
+# LibreOffice da paginación fiel y está disponible en servidores Linux sin Office.
 BUILTIN_ENGINES: tuple[ConversionEngine, ...] = (
-    cast(ConversionEngine, WordEngine()),
     cast(ConversionEngine, LibreOfficeEngine()),
+    cast(ConversionEngine, WordEngine()),
     cast(ConversionEngine, WeasyPrintEngine()),
 )
 

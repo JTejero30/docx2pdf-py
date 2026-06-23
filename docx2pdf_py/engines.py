@@ -206,9 +206,12 @@ end run"""
 
 # -- engine selection -------------------------------------------------------
 def default_engine() -> str:
-    """Return the engine that ``auto`` mode would use on this system."""
-    if word_available():
-        return "word"
+    """Return the engine that ``auto`` mode would use on this system.
+
+    Orden de preferencia: LibreOffice -> Word -> WeasyPrint (Python puro).
+    """
     if find_libreoffice():
         return "libreoffice"
+    if word_available():
+        return "word"
     return "weasyprint"
