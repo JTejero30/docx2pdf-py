@@ -788,6 +788,11 @@ class Converter(OOXMLPackage):
         if not inner.strip():
             inner = inner or " "
         inner = float_html + inner
+        # Word no parte una imagen entre páginas: si no cabe, empuja el párrafo
+        # entero a la siguiente (dejando hueco). break-inside:avoid lo replica y
+        # ayuda a que la paginación coincida.
+        if p.find(".//" + w("drawing")) is not None or p.find(".//" + w("pict")) is not None:
+            css.append("break-inside:avoid")
         return f'<p style="{";".join(css)}">{inner}</p>'
 
     # -- tablas ------------------------------------------------------------
@@ -1011,9 +1016,15 @@ class Converter(OOXMLPackage):
                     parts.append(self.render_paragraph(c))
                 elif t == "tbl":
                     parts.append(self.render_table(c))
-                if self._pending_floats:
-                    parts.extend(self._pending_floats)
-                    self._pending_floats = []
+            # En la portada las imágenes ANCLADAS van como BLOQUE (no con su
+            # offset absoluto del ancla, que las empujaría a otra página). Así
+            # caben en la página 1. Descartamos los contenedores absolutos.
+            self._pending_floats = []
+            for dr in root.iter(w("drawing")):
+                if dr.find(f"{{{WP}}}anchor") is not None:
+                    img = self._render_drawing(dr)
+                    if img:
+                        parts.append(img)
             self._cur_rels, self._pending_floats = prev_rels, prev_floats
         if not parts:
             return ""
