@@ -39,7 +39,7 @@ class ConversionOptions:
 
     weasyprint_timeout: int = 120
     native_engine_timeout: int = 120
-    body_line_height: float = 1.0
+    body_line_height: float = 1.15  # "sencillo" de Word ≈ 1.15 en CSS
     cell_line_height: float = 1.16
     # El interlineado "sencillo" de Word (line=240, auto) incluye el line-gap de
     # la fuente; en CSS line-height:1.0 queda más apretado. Este factor lo
@@ -65,7 +65,7 @@ class ConversionOptions:
         return cls(
             weasyprint_timeout=_env_int("WEASYPRINT_TIMEOUT", 120),
             native_engine_timeout=_env_int("NATIVE_ENGINE_TIMEOUT", 120),
-            body_line_height=_env_float("BODY_LH", 1.0),
+            body_line_height=_env_float("BODY_LH", 1.15),
             cell_line_height=_env_float("CELL_LH", 1.16),
             line_height_factor=_env_float("LINE_FACTOR", 1.15),
             respect_page_hints=_env_bool("RESPECT_PAGE_HINTS", True),

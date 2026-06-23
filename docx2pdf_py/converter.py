@@ -982,6 +982,43 @@ class Converter(OOXMLPackage):
             return ""
         return f'<section class="{kind}"><ol>{"".join(entries)}</ol></section>'
 
+    def _render_cover(self) -> str:
+        """Portada: con titlePg, la cabecera/pie de PRIMERA página suelen llevar
+        la portada (título + imagen a toda página). Como elementos 'running'
+        irían confinados al margen; en su lugar la inyectamos como contenido de
+        la página 1 (seguido de un salto de página).
+
+        Solo se activa si esa cabecera/pie tiene IMÁGENES (portada gráfica); una
+        de solo texto (p. ej. 'Confidencial' en la 1ª página) sigue siendo un
+        elemento 'running' normal."""
+        firsts = [it for it in (self.headers.get("first"), self.footers.get("first"))
+                  if it and it[0] is not None]
+        has_image = any(
+            (root.find(".//" + w("drawing")) is not None
+             or root.find(".//" + w("pict")) is not None)
+            for root, _ in firsts
+        )
+        if not has_image:
+            return ""
+        parts: list[str] = []
+        for item in firsts:
+            root, rels = item
+            prev_rels, prev_floats = self._cur_rels, self._pending_floats
+            self._cur_rels, self._pending_floats = rels or self.rels, []
+            for c in self._iter_blocks(root):
+                t = etree.QName(c).localname
+                if t == "p":
+                    parts.append(self.render_paragraph(c))
+                elif t == "tbl":
+                    parts.append(self.render_table(c))
+                if self._pending_floats:
+                    parts.extend(self._pending_floats)
+                    self._pending_floats = []
+            self._cur_rels, self._pending_floats = prev_rels, prev_floats
+        if not parts:
+            return ""
+        return '<div class="cover" style="break-after:page">' + "".join(parts) + "</div>"
+
     def _iter_blocks(self, parent: Any):
         """Itera bloques (p/tbl) descendiendo en los w:sdt (controles de
         contenido que envuelven portadas, índices y otros elementos de galería
@@ -1066,10 +1103,18 @@ class Converter(OOXMLPackage):
                 return name
             return None
 
+        # Portada inyectada como contenido de la página 1 (ver _render_cover).
+        cover_html = self._render_cover() if self.title_pg else ""
+
         hdr = emit(self.headers["default"], False, "hdr")
         ftr = emit(self.footers["default"], True, "ftr")
-        hdr_first = emit(self.headers["first"], False, "hdr_first")
-        ftr_first = emit(self.footers["first"], True, "ftr_first")
+        if cover_html:
+            # la portada YA es contenido de la página 1: no la dupliques como
+            # cabecera/pie 'running'
+            hdr_first = ftr_first = None
+        else:
+            hdr_first = emit(self.headers["first"], False, "hdr_first")
+            ftr_first = emit(self.footers["first"], True, "ftr_first")
         hdr_even = emit(self.headers["even"], False, "hdr_even")
         ftr_even = emit(self.footers["even"], True, "ftr_even")
 
@@ -1148,7 +1193,7 @@ class Converter(OOXMLPackage):
             "<!DOCTYPE html><html><head><meta charset='utf-8'>"
             + head_meta + "<style>"
             + page_css + "</style></head><body>"
-            + "".join(divs) + '<main class="document">' + "".join(blocks)
+            + "".join(divs) + '<main class="document">' + cover_html + "".join(blocks)
             + notes + endnotes + "</main>"
             + "</body></html>"
         )
