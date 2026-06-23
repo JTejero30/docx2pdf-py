@@ -65,6 +65,8 @@ MAX_XML_ELEMENTS = 2_000_000
 
 # WeasyPrint rendering timeout in seconds (0 = no timeout).
 BLOCK_IMG_STYLE = "display:block;margin:6pt auto;max-width:100%;"
+# inline-block para que varias imágenes en línea fluyan EN PARALELO (no apiladas)
+INLINE_IMG_STYLE = "display:inline-block;vertical-align:bottom;max-width:100%;"
 
 
 class Converter(OOXMLPackage):
@@ -472,7 +474,7 @@ class Converter(OOXMLPackage):
                 # solo las imágenes EN LÍNEA van aquí; las flotantes (wp:anchor)
                 # las gestiona el párrafo (float o bloque aparte)
                 if child.find(f"{{{WP}}}inline") is not None:
-                    img = self._render_drawing(child)
+                    img = self._render_drawing(child, inline=True)
                     if img:
                         images.append(img)
                 textbox = child.find(".//" + w("txbxContent"))
@@ -496,6 +498,10 @@ class Converter(OOXMLPackage):
                         )
                         + "</span>"
                     )
+                else:  # imagen VML (formato antiguo, frecuente en cabeceras/portadas)
+                    vml = self._render_vml(child)
+                    if vml:
+                        images.append(vml)
             elif tag == "object":
                 chunks.append('<span class="unsupported object">[Embedded object]</span>')
             elif tag == "t":
@@ -550,8 +556,74 @@ class Converter(OOXMLPackage):
                     f"height:{emu_pt(ext.get('cy')):.1f}pt;")
         return f'<img src="{self._image_src(target)}" style="{style}{dims}">'
 
-    def _render_drawing(self, drawing: Any) -> str:
-        return self._img_html(drawing, BLOCK_IMG_STYLE)
+    def _render_drawing(self, drawing: Any, inline: bool = False) -> str:
+        return self._img_html(drawing, INLINE_IMG_STYLE if inline else BLOCK_IMG_STYLE)
+
+    def _render_vml(self, pict: Any) -> str:
+        """Imagen VML (<w:pict>/<v:imagedata r:id=...>), formato antiguo."""
+        for el in pict.iter():
+            if etree.QName(el).localname == "imagedata":
+                target = self._cur_rels.get(el.get(f"{{{R}}}id"))
+                if target:
+                    return f'<img src="{self._image_src(target)}" style="{INLINE_IMG_STYLE}">'
+        return ""
+
+    def _anchor_box(self, drawing: Any) -> dict[str, Any]:
+        """Geometría de una imagen flotante <wp:anchor>: offsets (pt), tamaño,
+        z-order y si va detrás del texto."""
+        an = drawing.find(f"{{{WP}}}anchor")
+        if an is None:
+            return {}
+
+        def pos(tag: str) -> tuple[Any, Any]:
+            pe = an.find(f"{{{WP}}}{tag}")
+            if pe is None:
+                return (None, None)
+            off = pe.find(f"{{{WP}}}posOffset")
+            al = pe.find(f"{{{WP}}}align")
+            off_pt = emu_pt(off.text) if (off is not None and off.text) else None
+            return (off_pt, al.text if al is not None else None)
+
+        off_h, al_h = pos("positionH")
+        off_v, _ = pos("positionV")
+        ext = an.find(f"{{{WP}}}extent")
+        z = an.get("relativeHeight")
+        return {
+            "offH": off_h, "alH": al_h, "offV": off_v,
+            "w": emu_pt(ext.get("cx")) if (ext is not None and ext.get("cx")) else None,
+            "h": emu_pt(ext.get("cy")) if (ext is not None and ext.get("cy")) else None,
+            "z": int(z) if (z and z.isdigit()) else 0,
+            "behind": an.get("behindDoc") in ("1", "true"),
+        }
+
+    def _render_anchored(self, drawings: list[Any]) -> str:
+        """Imágenes flotantes SIN ajuste, colocadas con posición ABSOLUTA y
+        z-order -> pueden quedar en paralelo o SUPERPUESTAS (una sobre otra),
+        como en Word. Los valores reales de relativeHeight son enormes, así que
+        reasignamos z-index 0,1,2… ordenando de atrás hacia delante."""
+        entries = []
+        for dr in drawings:
+            img = self._img_html(dr, INLINE_IMG_STYLE)
+            if img:
+                entries.append((self._anchor_box(dr), img))
+        if not entries:
+            return ""
+        entries.sort(key=lambda e: (0 if e[0].get("behind") else 1, e[0].get("z", 0)))
+        items, max_bottom = [], 0.0
+        for z, (b, img) in enumerate(entries):
+            off_v = b.get("offV") or 0.0
+            st = "position:absolute;"
+            if b.get("alH") == "center" or (b.get("offH") is None and b.get("alH") in (None, "center")):
+                st += "left:50%;transform:translateX(-50%);"
+            elif b.get("alH") == "right":
+                st += "right:0;"
+            else:
+                st += f"left:{b.get('offH') or 0.0:.1f}pt;"
+            st += f"top:{off_v:.1f}pt;z-index:{z};"
+            items.append(f'<div style="{st}">{img}</div>')
+            max_bottom = max(max_bottom, off_v + (b.get("h") or 0.0))
+        return (f'<div style="position:relative;height:{max_bottom:.1f}pt">'
+                + "".join(items) + "</div>")
 
     def _render_anchor(self, drawing: Any) -> tuple[str, bool]:
         """Imagen flotante (wp:anchor). Devuelve (html, wraps).
@@ -686,17 +758,27 @@ class Converter(OOXMLPackage):
         inner = self.render_runs(p, base)
 
         # imágenes flotantes: con ajuste -> float dentro del párrafo (el texto
-        # las rodea); sin ajuste -> bloque diferido tras el bloque actual.
+        # las rodea); sin ajuste -> contenedor diferido con posición absoluta y
+        # z-order, para que queden EN PARALELO o SUPERPUESTAS como en Word.
         float_html = ""
+        block_anchors = []
         for dr in p.iter(w("drawing")):
-            if dr.find(f"{{{WP}}}anchor") is not None:
-                img, wraps = self._render_anchor(dr)
-                if not img:
-                    continue
-                if wraps:
-                    float_html += img
-                else:
-                    self._pending_floats.append(img)
+            an = dr.find(f"{{{WP}}}anchor")
+            if an is None:
+                continue
+            img, wraps = self._render_anchor(dr)
+            if not img:
+                continue
+            if wraps:
+                float_html += img
+            elif an.find(f"{{{WP}}}wrapTopAndBottom") is not None:
+                self._pending_floats.append(img)  # bloque, texto arriba/abajo
+            else:
+                block_anchors.append(dr)  # wrapNone -> superpuestas/en paralelo
+        if block_anchors:
+            container = self._render_anchored(block_anchors)
+            if container:
+                self._pending_floats.append(container)
 
         if is_list:
             marker = self._list_marker(num_id, ilvl)

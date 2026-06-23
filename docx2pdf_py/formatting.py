@@ -6,9 +6,42 @@ from typing import Any
 
 from .ooxml import attr, first, on
 
+# Fuentes de Office mapeadas a equivalentes MÉTRICAMENTE compatibles y libres
+# (mismas anchuras -> mismo espaciado y misma paginación). Las Liberation suelen
+# venir con el sistema; Carlito/Caladea/Gelasio se instalan (ver requirements.txt).
 FONT_MAP = {
+    # Aptos (default de Office desde 2024): sin clon métrico libre. Si están las
+    # .ttf reales se usan; si no, cae a Liberation Sans (aproximado).
+    "Aptos": "Aptos, 'Liberation Sans', Arimo, sans-serif",
+    "Aptos Display": "'Aptos Display', Aptos, 'Liberation Sans', sans-serif",
+    "Aptos Light": "'Aptos Light', Aptos, 'Liberation Sans', sans-serif",
+    "Aptos Mono": "'Aptos Mono', 'Liberation Mono', monospace",
+    "Aptos Serif": "'Aptos Serif', 'Liberation Serif', serif",
     "Calibri": "Carlito, Calibri, sans-serif",
+    "Calibri Light": "Carlito, 'Calibri Light', Calibri, sans-serif",
+    "Cambria": "Caladea, Cambria, 'Liberation Serif', serif",
+    "Cambria Math": "Caladea, Cambria, 'Liberation Serif', serif",
     "Georgia": "Gelasio, Georgia, serif",
+    "Arial": "'Liberation Sans', Arimo, Arial, sans-serif",
+    "Arial Narrow": "'Liberation Sans Narrow', 'Liberation Sans', Arial, sans-serif",
+    "Helvetica": "'Liberation Sans', Arimo, Helvetica, sans-serif",
+    "Times New Roman": "'Liberation Serif', Tinos, 'Times New Roman', serif",
+    "Times": "'Liberation Serif', Tinos, Times, serif",
+    "Courier New": "'Liberation Mono', Cousine, 'Courier New', monospace",
+    "Consolas": "'Liberation Mono', Consolas, monospace",
+    "Verdana": "'DejaVu Sans', Verdana, sans-serif",
+    "Tahoma": "'DejaVu Sans', Tahoma, sans-serif",
+    # Fuentes Google libres (instalables); las variantes con nombre propio
+    # (Black/Medium) caen a la familia base, que fontconfig sirve con su peso.
+    "Lato": "Lato, 'Liberation Sans', sans-serif",
+    "Lato Black": "Lato, 'Liberation Sans', sans-serif",
+    "Lato Light": "Lato, 'Liberation Sans', sans-serif",
+    "Roboto": "Roboto, 'Liberation Sans', sans-serif",
+    "Roboto Medium": "Roboto, 'Liberation Sans', sans-serif",
+    "Roboto Light": "Roboto, 'Liberation Sans', sans-serif",
+    "Roboto Condensed": "'Roboto Condensed', Roboto, 'Liberation Sans', sans-serif",
+    "Menlo": "'DejaVu Sans Mono', 'Liberation Mono', monospace",
+    "Symbol": "'Standard Symbols PS', Symbol, serif",
 }
 
 GENERIC_FAMILY = {
@@ -21,6 +54,12 @@ GENERIC_FAMILY = {
     "Consolas": "monospace",
     "Lucida Console": "monospace",
 }
+
+# Pistas por subcadena cuando la fuente no está mapeada ni en GENERIC_FAMILY:
+# mejor un serif/monospace acertado que 'sans-serif' a ciegas.
+_SERIF_HINT = ("Times", "Garamond", "Georgia", "Cambria", "Book", "Minion",
+               "Palatino", "Serif", "Roman", "Caslon", "Baskerville")
+_MONO_HINT = ("Mono", "Courier", "Consolas", "Code", "Console")
 
 HIGHLIGHT_COLORS = {
     "black": "#000000", "blue": "#0000FF", "cyan": "#00FFFF",
@@ -81,7 +120,15 @@ def font_stack(name: str | None) -> str | None:
         return None
     if name in FONT_MAP:
         return FONT_MAP[name]
-    return f"'{name}', {GENERIC_FAMILY.get(name, 'sans-serif')}"
+    generic = GENERIC_FAMILY.get(name)
+    if generic is None:
+        if any(h in name for h in _MONO_HINT):
+            generic = "monospace"
+        elif any(h in name for h in _SERIF_HINT):
+            generic = "serif"
+        else:
+            generic = "sans-serif"
+    return f"'{name}', {generic}"
 
 
 def rpr_dict(rpr: Any) -> dict[str, Any]:
