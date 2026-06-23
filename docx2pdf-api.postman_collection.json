@@ -1,7 +1,7 @@
 {
   "info": {
     "name": "docx2pdf-py API",
-    "description": "Conversión .docx -> PDF en red local. Cambia {{base_url}} si la IP del servidor es distinta. El parámetro ?engine= elige el motor: weasyprint (Python puro, aprox.), libreoffice (páginas exactas como Word), word (solo si hay MS Word), auto.",
+    "description": "Conversión .docx -> PDF en red local. Cambia {{base_url}} si la IP del servidor varía. El parámetro ?engine= elige el motor: auto (LibreOffice -> Word -> Python), libreoffice (páginas exactas como Word), weasyprint (Python puro, aprox.), word (solo si hay MS Office). La respuesta incluye las cabeceras X-Engine y X-Page-Count.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -13,16 +13,12 @@
       "request": {
         "method": "GET",
         "header": [],
-        "url": {
-          "raw": "{{base_url}}/health",
-          "host": ["{{base_url}}"],
-          "path": ["health"]
-        },
-        "description": "Comprueba que el servidor está vivo e indica el motor por defecto."
+        "url": { "raw": "{{base_url}}/health", "host": ["{{base_url}}"], "path": ["health"] },
+        "description": "Comprueba que el servidor está vivo e indica el motor que usaría 'auto' y si el guardado está activo."
       }
     },
     {
-      "name": "Convert - weasyprint (Python puro)",
+      "name": "Convert - auto (recomendado)",
       "request": {
         "method": "POST",
         "header": [],
@@ -33,14 +29,12 @@
           ]
         },
         "url": {
-          "raw": "{{base_url}}/convert?engine=weasyprint",
+          "raw": "{{base_url}}/convert?engine=auto",
           "host": ["{{base_url}}"],
           "path": ["convert"],
-          "query": [
-            { "key": "engine", "value": "weasyprint", "description": "Python puro; paginación aproximada" }
-          ]
+          "query": [ { "key": "engine", "value": "auto", "description": "LibreOffice -> Word -> Python según disponibilidad" } ]
         },
-        "description": "Sube un .docx (Body > form-data > key 'file' tipo File) y usa 'Send and Download' para guardar el PDF. Motor Python puro."
+        "description": "Sube el .docx (Body > form-data > key 'file' tipo File) y usa 'Send and Download' para guardar el PDF. En esta máquina 'auto' usa LibreOffice (páginas exactas)."
       }
     },
     {
@@ -58,15 +52,13 @@
           "raw": "{{base_url}}/convert?engine=libreoffice",
           "host": ["{{base_url}}"],
           "path": ["convert"],
-          "query": [
-            { "key": "engine", "value": "libreoffice", "description": "Paginación idéntica a Word (usa LibreOffice)" }
-          ]
+          "query": [ { "key": "engine", "value": "libreoffice", "description": "Mismo nº de páginas y contenido por página que Word" } ]
         },
-        "description": "Igual que el anterior pero con motor LibreOffice: mismo nº de páginas y contenido por página que Word. Respuesta con cabeceras X-Engine y X-Page-Count."
+        "description": "Motor LibreOffice: paginación fiel a Word (para referenciar páginas). Devuelve X-Page-Count."
       }
     },
     {
-      "name": "Convert - auto",
+      "name": "Convert - weasyprint (Python puro)",
       "request": {
         "method": "POST",
         "header": [],
@@ -77,14 +69,12 @@
           ]
         },
         "url": {
-          "raw": "{{base_url}}/convert?engine=auto",
+          "raw": "{{base_url}}/convert?engine=weasyprint",
           "host": ["{{base_url}}"],
           "path": ["convert"],
-          "query": [
-            { "key": "engine", "value": "auto", "description": "Word -> LibreOffice -> weasyprint según disponibilidad" }
-          ]
+          "query": [ { "key": "engine", "value": "weasyprint", "description": "Sin dependencias externas; paginación aproximada" } ]
         },
-        "description": "Deja que el servidor elija el mejor motor disponible (en esta máquina: LibreOffice)."
+        "description": "Motor Python puro (sin LibreOffice). Fidelidad visual alta pero la paginación no es exacta."
       }
     }
   ]
