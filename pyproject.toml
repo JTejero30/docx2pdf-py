@@ -54,6 +54,7 @@ docx2pdf-py = "docx2pdf_py.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["docx2pdf_py"]
+artifacts = ["docx2pdf_py/fonts/*.ttf"]  # empaquetar las fuentes (@font-face)
 
 [tool.ruff]
 line-length = 100

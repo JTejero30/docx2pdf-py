@@ -35,6 +35,7 @@ from .formatting import (
 )
 from .formatting import _to_letter as _to_letter
 from .formatting import _to_roman as _to_roman
+from .fonts import font_face_css
 from .models import ConversionOptions, ConversionResult, Engine
 from .ooxml import (
     CP,
@@ -1172,6 +1173,7 @@ class Converter(OOXMLPackage):
         root_size = self.default.get("size", 10.0)
         root_color = self.default.get("color", "#000000")
         page_css = f"""
+        {font_face_css()}
         {base_page}
         {"".join(named_pages)}
         {first_page}

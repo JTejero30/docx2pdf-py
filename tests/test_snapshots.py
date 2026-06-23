@@ -26,6 +26,10 @@ def _make_docx(tmp_path, body_xml: str, name: str) -> str:
 
 
 def _check_snapshot(name: str, actual: str, update: bool) -> None:
+    # Las @font-face llevan rutas file:// absolutas (dependen de la máquina);
+    # se normalizan para que el snapshot sea portable.
+    import re
+    actual = re.sub(r"src:url\('file://[^']*'\)", "src:url('BUNDLED')", actual)
     SNAPSHOT_DIR.mkdir(exist_ok=True)
     snap = SNAPSHOT_DIR / name
     if update or not snap.exists():
