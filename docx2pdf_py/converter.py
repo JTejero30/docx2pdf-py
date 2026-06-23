@@ -982,6 +982,19 @@ class Converter(OOXMLPackage):
             return ""
         return f'<section class="{kind}"><ol>{"".join(entries)}</ol></section>'
 
+    def _iter_blocks(self, parent: Any):
+        """Itera bloques (p/tbl) descendiendo en los w:sdt (controles de
+        contenido que envuelven portadas, índices y otros elementos de galería
+        de Word). Sin esto, esos bloques se perderían."""
+        for child in parent:
+            tag = etree.QName(child).localname
+            if tag in ("p", "tbl"):
+                yield child
+            elif tag == "sdt":
+                content = first(child, "sdtContent")
+                if content is not None:
+                    yield from self._iter_blocks(content)
+
     def build_html(self) -> str:
         body = self.doc.find(w("body"))
         sect = body.find(w("sectPr"))
@@ -1016,7 +1029,7 @@ class Converter(OOXMLPackage):
             )
             section_blocks.clear()
 
-        for child in body:
+        for child in self._iter_blocks(body):
             tag = etree.QName(child).localname
             if tag == "p":
                 section_blocks.append(self.render_paragraph(child))
